@@ -34,10 +34,12 @@ make test
 make test-native
 ```
 
-- `make test` runs 50 offline checks for gestures, contact lifecycle, configuration, shortcut validation, and registration failure handling.
-- `make test-native` runs 14 app-local AppKit and Carbon checks. These use temporary nonactivating windows, private controls, and injected shortcut registration, focus, and window-hit state.
+- `make test` runs 58 offline checks for gestures, contact lifecycle, configuration, shortcut validation, and registration failure handling.
+- `make test-native` runs 21 app-local AppKit and Carbon checks. These use temporary nonactivating windows, private controls, and injected shortcut registration, focus, and window-hit state.
 
-The native suite sends events only to its own application. Its temporary windows do not require global input access. Preference tests use isolated `local.pen-pan.tests.<UUID>` suites and remove them afterward. Lock tests use temporary paths, not the live instance lock.
+The native suite sends events only to its own application. Its temporary windows do not require global input access. Application-picker tests inject presentation and selected URLs, then validate temporary `.app` packages without launching them. Pointer tests inject window metadata and PID-to-bundle lookups rather than reading other apps. The Settings rendering check writes only its own content view to ignored `.build/settings-fixture.png` and asserts control bounds, wrapping-message heights, long-ID tooltips, and key order. It also verifies that duplicate Add refreshes an existing row's displayed title, tooltip, and accessibility label without changing membership or sibling settings, and that repeated input-status notifications do not reload the app list.
+
+Preference tests use isolated `local.pen-pan.tests.<UUID>` suites and remove them afterward. Lock tests use temporary paths, not the live instance lock.
 
 No arguments and `--help` return before opening the live settings suite, acquiring the lock, installing a tap, or registering a shortcut. Do not use `--menu` or `--run` as automated test commands: those modes enable live observation and can intercept pen input.
 
@@ -58,7 +60,8 @@ make clean
 | [`pen-pan.swift`](../pen-pan.swift): `ScrollSettings`, `ConfigurationStore` | Launch validation and saved configuration. |
 | `Shortcut`, `ShortcutRecording`, `ShortcutRecorder` | Key validation, labels, recording, and focused Command-release handling. |
 | `HotKeyAPI`, `HotKeyRegistration` | Native shortcut checks, exclusive registration, dispatch, and cleanup. |
-| `SettingsControl` | Settings actions, accessibility labels, and the helper-window exception. |
+| `ApplicationID`, `SelectedApplication`, `PointerTargetResolver` | Validated bundle identities, local package checks, and the injected pointer-window owner boundary. |
+| `SettingsControl` | Grouped controls, cheap live status, accessible app rows, and owned picker lifetime. |
 | `Gesture`, `EventAdapter` | Tap deferral, distance-based scrolling, and event conversion. |
 | `Lifecycle`, `LiveSession`, `InstanceLock` | Contact ownership, ON and OFF transitions, tap lifetime, shutdown, and single-instance locking. |
 | `MenuControl`, `PenPan` | Menu actions and command-line entry point. |
@@ -72,8 +75,8 @@ make clean
 3. Run `make check` and both safe usage commands.
 4. If the change affects live input, verify it manually in a controlled session with a known way to quit.
 
-For live-input changes, check pen taps and pans, both axes, OFF passthrough, mid-contact toggles, and quit while a contact is held. Verify that ordinary mouse and keyboard input remain unchanged. Check Settings-window tracking and per-contact sensitivity and reversal. For shortcut changes, check physical recognition, recording cancellation, Command-modified release, conflicts, Clear, and persistence after restart.
+For live-input changes, check pen taps and pans, both axes, OFF passthrough, mid-contact toggles, and quit while a contact is held. Verify that ordinary mouse and keyboard input remain unchanged. Check Settings and picker tracking and per-contact sensitivity and reversal. Verify an excluded inactive window under the pen while a different app has keyboard focus. Check unknown targets with active exclusions, list edits during a contact, duplicate/cancel feedback, and picker cleanup on Quit or signals. For shortcut changes, check physical recognition, F13 through F20 alone and with modifiers, recording cancellation, Command-modified release, conflicts, Clear, and persistence after restart. Check the live Settings status through ON, OFF, waiting-for-release, unavailable, and quitting states. Use Tab, Shift-Tab, Space, Return, and VoiceOver to verify native controls and the picker.
 
-The automated suites inject tap failure, shortcut registration, focus, and window-hit results. They do not prove real global-tap delivery, physical pen calibration, physical keyboard recognition, multi-display coordinates, or compatibility with other apps. Record the hardware, driver, apps, and macOS version used for manual checks. Keep those limits explicit in a contribution.
+The automated suites inject tap failure, shortcut registration, focus, window-hit results, native owner metadata, and picker presentation. They do not prove real global-tap delivery, physical pen calibration, physical keyboard recognition, the real WindowServer owner query, real picker hit-testing, multi-display coordinates, or compatibility with other apps. VoiceOver speech and physical tablet-driver F13 through F20 mapping still need manual verification. Record the hardware, driver, apps, and macOS version used for manual checks. Keep those limits explicit in a contribution.
 
 Keep changes focused and update the relevant public guide when behavior changes. Do not commit binaries, preferences, input traces, private logs, or credentials.

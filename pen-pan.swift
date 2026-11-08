@@ -38,23 +38,39 @@ struct Shortcut: Equatable {
     let keyCode: UInt32
     let modifiers: UInt32
     static let modifierMask = UInt32(cmdKey | optionKey | controlKey | shiftKey)
+    struct Key {
+        let label: String
+        let allowsStandalone: Bool
+        init(_ label: String, allowsStandalone: Bool = false) {
+            self.label = label
+            self.allowsStandalone = allowsStandalone
+        }
+    }
     // Labels name physical US-layout positions, not the current input source's characters.
-    static let keys: [UInt32: String] = [
-        0: "A", 1: "S", 2: "D", 3: "F", 4: "H", 5: "G", 6: "Z", 7: "X", 8: "C", 9: "V", 11: "B",
-        12: "Q", 13: "W", 14: "E", 15: "R", 16: "Y", 17: "T", 18: "1", 19: "2", 20: "3", 21: "4",
-        22: "6", 23: "5", 24: "=", 25: "9", 26: "7", 27: "-", 28: "8", 29: "0", 30: "]", 31: "O",
-        32: "U", 33: "[", 34: "I", 35: "P", 36: "Return", 37: "L", 38: "J", 39: "'", 40: "K", 41: ";",
-        42: "\\", 43: ",", 44: "/", 45: "N", 46: "M", 47: ".", 48: "Tab", 50: "`", 51: "Delete",
-        96: "F5", 97: "F6", 98: "F7", 99: "F3", 100: "F8", 101: "F9", 103: "F11", 109: "F10",
-        111: "F12", 115: "Home", 116: "Page Up", 117: "Forward Delete", 118: "F4", 119: "End",
-        120: "F2", 121: "Page Down", 122: "F1", 123: "Left", 124: "Right", 125: "Down", 126: "Up"
-    ]
+    static let keys: [UInt32: Key] = {
+        let modified: [UInt32: String] = [
+            0: "A", 1: "S", 2: "D", 3: "F", 4: "H", 5: "G", 6: "Z", 7: "X", 8: "C", 9: "V", 11: "B",
+            12: "Q", 13: "W", 14: "E", 15: "R", 16: "Y", 17: "T", 18: "1", 19: "2", 20: "3", 21: "4",
+            22: "6", 23: "5", 24: "=", 25: "9", 26: "7", 27: "-", 28: "8", 29: "0", 30: "]", 31: "O",
+            32: "U", 33: "[", 34: "I", 35: "P", 36: "Return", 37: "L", 38: "J", 39: "'", 40: "K", 41: ";",
+            42: "\\", 43: ",", 44: "/", 45: "N", 46: "M", 47: ".", 48: "Tab", 50: "`", 51: "Delete",
+            96: "F5", 97: "F6", 98: "F7", 99: "F3", 100: "F8", 101: "F9", 103: "F11", 109: "F10",
+            111: "F12", 115: "Home", 116: "Page Up", 117: "Forward Delete", 118: "F4", 119: "End",
+            120: "F2", 121: "Page Down", 122: "F1", 123: "Left", 124: "Right", 125: "Down", 126: "Up"
+        ]
+        var keys = modified.mapValues { Key($0) }
+        for (code, label) in [(kVK_F13, "F13"), (kVK_F14, "F14"), (kVK_F15, "F15"), (kVK_F16, "F16"),
+                              (kVK_F17, "F17"), (kVK_F18, "F18"), (kVK_F19, "F19"), (kVK_F20, "F20")] {
+            keys[UInt32(code)] = Key(label, allowsStandalone: true)
+        }
+        return keys
+    }()
 
     init(keyCode: UInt32, modifiers: UInt32) throws {
-        guard Self.keys[keyCode] != nil,
+        guard let key = Self.keys[keyCode],
               modifiers & ~Self.modifierMask == 0,
-              modifiers & UInt32(cmdKey | optionKey | controlKey) != 0 else {
-            throw Failure("Use Control, Option or Command with a supported key, not Space or a modifier alone.")
+              (key.allowsStandalone || modifiers & UInt32(cmdKey | optionKey | controlKey) != 0) else {
+            throw Failure("Use Control, Option or Command with a supported key, or F13–F20 alone. Space and modifier-only keys are not supported.")
         }
         self.keyCode = keyCode
         self.modifiers = modifiers
@@ -71,16 +87,82 @@ struct Shortcut: Equatable {
 
     var label: String {
         [(controlKey, "⌃"), (optionKey, "⌥"), (shiftKey, "⇧"), (cmdKey, "⌘")]
-            .filter { modifiers & UInt32($0.0) != 0 }.map { $0.1 }.joined() + Self.keys[keyCode]!
+            .filter { modifiers & UInt32($0.0) != 0 }.map { $0.1 }.joined() + Self.keys[keyCode]!.label
+    }
+}
+
+struct ApplicationID: Hashable {
+    let rawValue: String
+    // Bundle IDs use dot-separated ASCII alphanumeric/hyphen components, each starting alphanumeric.
+    init?(_ value: String) {
+        guard value.range(of: "\\A[A-Za-z0-9][A-Za-z0-9-]*(\\.[A-Za-z0-9][A-Za-z0-9-]*)+\\z",
+                          options: .regularExpression) != nil else { return nil }
+        rawValue = value
+    }
+}
+
+struct TargetApplication {
+    let pid: pid_t
+    let id: ApplicationID
+}
+
+struct PointerTargetResolver {
+    private let windowInfo: (CGWindowID) -> [[String: Any]]?
+    private let bundleIdentifier: (pid_t) -> String?
+
+    init(windowInfo: @escaping (CGWindowID) -> [[String: Any]]? = {
+        CGWindowListCopyWindowInfo(.optionIncludingWindow, $0) as? [[String: Any]]
+    }, bundleIdentifier: @escaping (pid_t) -> String? = {
+        NSRunningApplication(processIdentifier: $0)?.bundleIdentifier
+    }) {
+        self.windowInfo = windowInfo
+        self.bundleIdentifier = bundleIdentifier
+    }
+
+    func application(forWindow number: Int) -> TargetApplication? {
+        func positiveInteger(_ value: Any?, maximum: Double) -> Double? {
+            guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+            let value = number.doubleValue
+            return value.isFinite && value.rounded() == value && (1...maximum).contains(value) ? value : nil
+        }
+        guard number > 0, UInt64(number) <= UInt64(CGWindowID.max),
+              let info = windowInfo(CGWindowID(number))?.first(where: {
+                  positiveInteger($0[kCGWindowNumber as String], maximum: Double(CGWindowID.max)) == Double(number)
+              }),
+              let owner = positiveInteger(info[kCGWindowOwnerPID as String], maximum: Double(pid_t.max)),
+              let identifier = bundleIdentifier(pid_t(owner)), let id = ApplicationID(identifier) else { return nil }
+        return TargetApplication(pid: pid_t(owner), id: id)
+    }
+}
+
+struct SelectedApplication {
+    let id: ApplicationID
+    let name: String
+
+    init(url: URL) throws {
+        guard url.isFileURL, url.pathExtension.lowercased() == "app",
+              (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true,
+              let bundle = Bundle(url: url), bundle.object(forInfoDictionaryKey: "CFBundlePackageType") as? String == "APPL",
+              let executable = bundle.executableURL,
+              (try? executable.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
+              FileManager.default.isExecutableFile(atPath: executable.path),
+              let identifier = bundle.bundleIdentifier, let id = ApplicationID(identifier) else {
+            throw Failure("Choose a local .app package with a valid bundle ID and executable. Nothing was changed.")
+        }
+        self.id = id
+        name = (bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+            ?? (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? url.deletingPathExtension().lastPathComponent
     }
 }
 
 struct Configuration: Equatable {
     let scroll: ScrollSettings
     let shortcut: Shortcut?
-    init(scroll: ScrollSettings = ScrollSettings(), shortcut: Shortcut? = nil) {
+    let excludedApps: Set<ApplicationID>
+    init(scroll: ScrollSettings = ScrollSettings(), shortcut: Shortcut? = nil, excludedApps: Set<ApplicationID> = []) {
         self.scroll = scroll
         self.shortcut = shortcut
+        self.excludedApps = excludedApps
     }
 }
 
@@ -115,12 +197,14 @@ final class ConfigurationStore {
             shortcut = try? Shortcut(keyCode: UInt32(code), modifiers: UInt32(modifiers))
         }
         return Configuration(scroll: ScrollSettings(sensitivity: sensitivity ?? fallback.sensitivity,
-                                                     threshold: fallback.threshold, reversed: reversed), shortcut: shortcut)
+                                                     threshold: fallback.threshold, reversed: reversed), shortcut: shortcut,
+                             excludedApps: Set((values["excludedApps"] as? [String] ?? []).compactMap(ApplicationID.init)))
     }
 
     func save(_ configuration: Configuration) {
         defaults.set(configuration.scroll.sensitivity, forKey: "sensitivity")
         defaults.set(configuration.scroll.reversed, forKey: "reversed")
+        defaults.set(configuration.excludedApps.map(\.rawValue).sorted(), forKey: "excludedApps")
         if let shortcut = configuration.shortcut {
             defaults.set(["keyCode": shortcut.keyCode, "modifiers": shortcut.modifiers], forKey: "shortcut")
         } else {
@@ -370,22 +454,35 @@ final class ShortcutRecorder: NSButton {
     }
 }
 
-final class SettingsControl: NSObject, NSWindowDelegate {
+final class SettingsControl: NSObject, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate {
     let window: NSWindow
+    let status = NSTextField(wrappingLabelWithString: "")
+    let toggle = NSButton(title: "", target: nil, action: nil)
     let sensitivity: NSSlider
     let value = NSTextField(labelWithString: "")
     let reverse = NSButton(checkboxWithTitle: "Reverse scroll direction", target: nil, action: nil)
     let recorder: ShortcutRecorder
     let clear = NSButton(title: "Clear", target: nil, action: nil)
     let message = NSTextField(wrappingLabelWithString: "")
+    let applications = NSTableView()
+    let applicationScroll = NSScrollView()
+    let add = NSButton(title: "Add application…", target: nil, action: nil)
+    let removeSelected = NSButton(title: "Remove selected", target: nil, action: nil)
+    let applicationMessage = NSTextField(wrappingLabelWithString: "")
+    private(set) var applicationRows: [ApplicationID] = []
+    private var applicationNames: [ApplicationID: String] = [:]
+    private(set) var applicationPanel: NSOpenPanel?
+    var presentApplicationPanel: (NSOpenPanel, NSWindow, @escaping (NSApplication.ModalResponse) -> Void) -> Void = {
+        $0.beginSheetModal(for: $1, completionHandler: $2)
+    }
+    var selectedApplicationURL: (NSOpenPanel) -> URL? = { $0.url }
     private unowned let session: LiveSession
     private var deactivateObserver: NSObjectProtocol?
     private var commandReleaseMonitor: Any?
-    var windowAtPoint: (CGPoint) -> Int = { NSWindow.windowNumber(at: $0, belowWindowWithWindowNumber: 0) }
 
     init(session: LiveSession, window: NSWindow? = nil) {
         self.session = session
-        self.window = window ?? NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 300),
+        self.window = window ?? NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 600),
                                         styleMask: [.titled, .closable], backing: .buffered, defer: false)
         sensitivity = NSSlider(value: session.configuration.scroll.sensitivity, minValue: 0.05, maxValue: 2,
                                target: nil, action: nil)
@@ -396,6 +493,11 @@ final class SettingsControl: NSObject, NSWindowDelegate {
         self.window.identifier = NSUserInterfaceItemIdentifier("penpan.settings.window")
         self.window.setAccessibilityIdentifier("penpan.settings.window")
         self.window.delegate = self
+        status.setAccessibilityIdentifier("penpan.status")
+        toggle.target = self
+        toggle.action = #selector(toggleEnabled(_:))
+        toggle.setAccessibilityIdentifier("penpan.toggle")
+        toggle.setAccessibilityLabel("Toggle pen scrolling")
         sensitivity.isContinuous = true
         sensitivity.target = self
         sensitivity.action = #selector(scrollChanged(_:))
@@ -409,24 +511,80 @@ final class SettingsControl: NSObject, NSWindowDelegate {
         clear.action = #selector(clearShortcut(_:))
         clear.setAccessibilityIdentifier("penpan.shortcut.clear")
         message.setAccessibilityIdentifier("penpan.settings.message")
+        applications.setAccessibilityIdentifier("penpan.exclusions.list")
+        applications.setAccessibilityLabel("Excluded applications, native input while ON")
+        applications.headerView = nil
+        applications.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("application")))
+        applications.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
+        applications.rowHeight = 44
+        applications.allowsMultipleSelection = false
+        applications.allowsEmptySelection = true
+        applications.dataSource = self
+        applications.delegate = self
+        applicationScroll.documentView = applications
+        applicationScroll.hasVerticalScroller = true
+        applicationScroll.borderType = .bezelBorder
+        for (button, identifier, action) in [
+            (add, "penpan.exclusions.add", #selector(addApplication(_:))),
+            (removeSelected, "penpan.exclusions.remove", #selector(removeApplication(_:)))
+        ] {
+            button.target = self
+            button.action = action
+            button.setAccessibilityIdentifier(identifier)
+        }
+        applicationMessage.setAccessibilityIdentifier("penpan.exclusions.message")
+        func heading(_ text: String) -> NSTextField {
+            let label = NSTextField(labelWithString: text)
+            label.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
+            return label
+        }
+        let statusRow = NSStackView(views: [status, toggle])
+        statusRow.distribution = .fill
+        status.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let sensitivityRow = NSStackView(views: [NSTextField(labelWithString: "Sensitivity"), sensitivity, value])
-        let shortcutRow = NSStackView(views: [NSTextField(labelWithString: "Toggle shortcut"), recorder, clear])
-        let hint = NSTextField(wrappingLabelWithString: "Scroll changes apply after pen release. Click the recorder, then press and release a shortcut. Esc cancels. Key names use physical US positions. The chosen shortcut is reserved while this helper runs; other apps' commands may conflict.")
-        let stack = NSStackView(views: [sensitivityRow, reverse, shortcutRow, hint, message])
+        let scrollHint = NSTextField(labelWithString: "Changes apply after pen release.")
+        scrollHint.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        scrollHint.textColor = .secondaryLabelColor
+        let reverseRow = NSStackView(views: [reverse, scrollHint])
+        let shortcutRow = NSStackView(views: [recorder, clear])
+        let hint = NSTextField(wrappingLabelWithString: "Press and release Control, Option or Command + key, or F13–F20 alone. Esc cancels. Physical US key names; other apps' commands may conflict.")
+        hint.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        let exclusionHint = NSTextField(labelWithString: "Keep handwriting and native drags in these apps while ON.")
+        exclusionHint.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        let applicationActions = NSStackView(views: [add, removeSelected])
+        let stack = NSStackView(views: [statusRow, heading("Scrolling"), sensitivityRow, reverseRow,
+                                        heading("Toggle shortcut"), shortcutRow, hint, message,
+                                        heading("Excluded apps"), exclusionHint, applicationScroll,
+                                        applicationActions, applicationMessage])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 12
+        stack.spacing = 8
         stack.translatesAutoresizingMaskIntoConstraints = false
         self.window.contentView!.addSubview(stack)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: self.window.contentView!.leadingAnchor, constant: 20),
             stack.trailingAnchor.constraint(equalTo: self.window.contentView!.trailingAnchor, constant: -20),
             stack.topAnchor.constraint(equalTo: self.window.contentView!.topAnchor, constant: 20),
-            sensitivity.widthAnchor.constraint(equalToConstant: 220),
-            recorder.widthAnchor.constraint(greaterThanOrEqualToConstant: 160),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: self.window.contentView!.bottomAnchor, constant: -20),
+            statusRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            status.heightAnchor.constraint(equalToConstant: 36),
+            toggle.widthAnchor.constraint(equalToConstant: 110),
+            sensitivity.widthAnchor.constraint(equalToConstant: 280),
+            value.widthAnchor.constraint(equalToConstant: 56),
+            recorder.widthAnchor.constraint(equalToConstant: 220),
             hint.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            message.widthAnchor.constraint(equalTo: stack.widthAnchor)
+            hint.heightAnchor.constraint(equalToConstant: 34),
+            message.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            message.heightAnchor.constraint(equalToConstant: 64),
+            applicationScroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            applicationScroll.heightAnchor.constraint(equalToConstant: 104),
+            applicationMessage.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            applicationMessage.heightAnchor.constraint(equalToConstant: 34)
         ])
+        let keyViews: [NSView] = [toggle, sensitivity, reverse, recorder, clear, applications, add, removeSelected]
+        self.window.autorecalculatesKeyViewLoop = false
+        for index in keyViews.indices { keyViews[index].nextKeyView = keyViews[(index + 1) % keyViews.count] }
+        self.window.initialFirstResponder = toggle
         session.recording.changed = { [weak self] in self?.refresh() }
         deactivateObserver = NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification,
                                                                     object: NSApplication.shared, queue: .main) { [weak session] _ in
@@ -437,6 +595,7 @@ final class SettingsControl: NSObject, NSWindowDelegate {
             guard let self else { return event }
             return self.recorder.routeCommandRelease(event)
         }
+        applicationMessage.stringValue = "No excluded apps. Add an application to keep its native pen input."
         refresh()
     }
 
@@ -451,7 +610,15 @@ final class SettingsControl: NSObject, NSWindowDelegate {
         NSApplication.shared.activate(ignoringOtherApps: true)
         refresh()
     }
+    func refreshStatus() {
+        let lifecycle = session.lifecycle
+        guard status.stringValue != lifecycle.status else { return }
+        status.stringValue = lifecycle.status
+        toggle.title = lifecycle.mode == .on ? "Turn OFF" : (lifecycle.observing ? "Turn ON" : "Retry ON")
+        toggle.isEnabled = lifecycle.mode != .quitting
+    }
     func refresh() {
+        refreshStatus()
         let scroll = session.configuration.scroll
         sensitivity.doubleValue = scroll.sensitivity
         value.stringValue = String(format: "%.2fx", scroll.sensitivity)
@@ -466,17 +633,126 @@ final class SettingsControl: NSObject, NSWindowDelegate {
         message.stringValue = [session.settingsError ?? (inactive ? "Saved shortcut is inactive." : nil), cleanup]
             .compactMap { $0 }.joined(separator: "\n")
         clear.isEnabled = session.configuration.shortcut != nil
+        if Set(applicationRows) != session.configuration.excludedApps {
+            let selected = selectedApplication
+            applicationRows = session.configuration.excludedApps.sorted { $0.rawValue < $1.rawValue }
+            for id in applicationRows where applicationNames[id] == nil {
+                let bundle = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id.rawValue).flatMap(Bundle.init(url:))
+                applicationNames[id] = (bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+                    ?? (bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String) ?? id.rawValue
+            }
+            applications.reloadData()
+            if let selected, let index = applicationRows.firstIndex(of: selected) {
+                applications.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+            } else { applications.deselectAll(nil) }
+            applicationMessage.stringValue = applicationRows.isEmpty
+                ? "No excluded apps. Add an application to keep its native pen input."
+                : "Exclusions apply to new pen contacts, not the app with keyboard focus."
+        }
+        removeSelected.isEnabled = selectedApplication != nil
     }
+    private var selectedApplication: ApplicationID? {
+        applicationRows.indices.contains(applications.selectedRow) ? applicationRows[applications.selectedRow] : nil
+    }
+    func numberOfRows(in tableView: NSTableView) -> Int { applicationRows.count }
+    func tableViewSelectionDidChange(_ notification: Notification) { removeSelected.isEnabled = selectedApplication != nil }
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        let id = applicationRows[row]
+        let name = applicationNames[id] ?? id.rawValue
+        let cell = NSTableCellView()
+        let title = NSTextField(labelWithString: name)
+        let identifier = NSTextField(labelWithString: id.rawValue)
+        identifier.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        identifier.textColor = .secondaryLabelColor
+        for label in [title, identifier] {
+            label.lineBreakMode = .byTruncatingMiddle
+            label.translatesAutoresizingMaskIntoConstraints = false
+            cell.addSubview(label)
+            NSLayoutConstraint.activate([
+                label.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 6),
+                label.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -6)
+            ])
+        }
+        NSLayoutConstraint.activate([
+            title.topAnchor.constraint(equalTo: cell.topAnchor, constant: 4),
+            identifier.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
+            identifier.bottomAnchor.constraint(lessThanOrEqualTo: cell.bottomAnchor, constant: -2)
+        ])
+        cell.textField = title
+        cell.toolTip = "\(name)\n\(id.rawValue)"
+        cell.setAccessibilityLabel("\(name), \(id.rawValue)")
+        return cell
+    }
+    @objc private func toggleEnabled(_ sender: Any?) { session.toggleEnabled() }
     @objc private func scrollChanged(_ sender: Any?) {
         session.setScroll(ScrollSettings(sensitivity: sensitivity.doubleValue,
                                         threshold: session.configuration.scroll.threshold, reversed: reverse.state == .on))
     }
     @objc private func clearShortcut(_ sender: Any?) { session.recording.cancel(); session.setShortcut(nil) }
+    @objc private func addApplication(_ sender: Any?) {
+        guard applicationPanel == nil, session.lifecycle.mode != .quitting else { return }
+        session.recording.cancel()
+        let panel = NSOpenPanel()
+        panel.title = "Exclude an application"
+        panel.prompt = "Add application"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.treatsFilePackagesAsDirectories = false
+        panel.allowedContentTypes = [.applicationBundle]
+        applicationPanel = panel
+        add.isEnabled = false
+        presentApplicationPanel(panel, window) { [weak self, weak panel] response in
+            guard let self, let panel, self.applicationPanel === panel, self.session.lifecycle.mode != .quitting else { return }
+            self.applicationPanel = nil
+            self.add.isEnabled = true
+            guard response == .OK else {
+                self.applicationMessage.stringValue = "Cancelled. No application added."
+                return
+            }
+            do {
+                guard let url = self.selectedApplicationURL(panel) else { throw Failure("No application selected. Nothing was changed.") }
+                let app = try SelectedApplication(url: url)
+                let duplicate = self.session.configuration.excludedApps.contains(app.id)
+                self.applicationNames[app.id] = app.name
+                if !duplicate { self.session.setExcludedApps(self.session.configuration.excludedApps.union([app.id])) }
+                if let row = self.applicationRows.firstIndex(of: app.id) {
+                    if duplicate {
+                        self.applications.reloadData(forRowIndexes: IndexSet(integer: row), columnIndexes: IndexSet(integer: 0))
+                    }
+                    self.applications.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+                    self.applications.scrollRowToVisible(row)
+                }
+                self.applicationMessage.stringValue = duplicate ? "That application is already excluded." : "Added. New contacts in this app keep native pen input."
+            } catch { self.applicationMessage.stringValue = String(describing: error) }
+        }
+    }
+    @objc private func removeApplication(_ sender: Any?) {
+        guard let id = selectedApplication else { return }
+        session.setExcludedApps(session.configuration.excludedApps.subtracting([id]))
+    }
+    func cancelApplicationPicker() {
+        guard let panel = applicationPanel else { return }
+        applicationPanel = nil
+        add.isEnabled = true
+        if panel.sheetParent != nil { window.endSheet(panel, returnCode: .cancel) }
+        panel.cancel(nil)
+        panel.orderOut(nil)
+    }
     func windowDidResignKey(_ notification: Notification) { session.recording.cancel() }
-    func windowWillClose(_ notification: Notification) { session.recording.cancel() }
-    func passes(_ event: CGEvent) -> Bool {
-        Self.targetsSettings(visible: window.isVisible, settingsNumber: window.windowNumber,
-                             targetNumber: windowAtPoint(event.unflippedLocation))
+    func windowWillClose(_ notification: Notification) { session.recording.cancel(); cancelApplicationPicker() }
+    var ownedWindowNumbers: Set<Int> {
+        var numbers: Set<Int> = []
+        func collect(_ window: NSWindow) {
+            if Self.targetsSettings(visible: window.isVisible, settingsNumber: window.windowNumber, targetNumber: window.windowNumber) {
+                numbers.insert(window.windowNumber)
+            }
+            for child in window.childWindows ?? [] { collect(child) }
+            if let sheet = window.attachedSheet, !(window.childWindows ?? []).contains(sheet) { collect(sheet) }
+        }
+        collect(window)
+        if let applicationPanel { collect(applicationPanel) }
+        return numbers
     }
     static func targetsSettings(visible: Bool, settingsNumber: Int, targetNumber: Int) -> Bool {
         visible && settingsNumber > 0 && settingsNumber == targetNumber
@@ -484,6 +760,7 @@ final class SettingsControl: NSObject, NSWindowDelegate {
     func remove() {
         session.recording.cancel()
         session.recording.changed = {}
+        cancelApplicationPicker()
         window.orderOut(nil)
         if let deactivateObserver { NotificationCenter.default.removeObserver(deactivateObserver) }
         deactivateObserver = nil
@@ -846,6 +1123,24 @@ final class LiveSession {
     private var source: CFRunLoopSource?
     private let runLoop = CFRunLoopGetCurrent()
     var changed: () -> Void = {}
+    var windowAtPoint: (CGPoint) -> Int = { NSWindow.windowNumber(at: $0, belowWindowWithWindowNumber: 0) }
+    var targetResolver = PointerTargetResolver()
+
+    func notifyChanged() {
+        settingsControl?.refreshStatus()
+        changed()
+    }
+
+    private func passesNewContact(_ event: CGEvent) -> Bool {
+        let windows = settingsControl?.ownedWindowNumbers ?? []
+        let exclusions = configuration.excludedApps
+        guard !windows.isEmpty || !exclusions.isEmpty else { return false }
+        let window = windowAtPoint(event.unflippedLocation)
+        if windows.contains(window) { return true }
+        guard !exclusions.isEmpty else { return false }
+        guard let application = targetResolver.application(forWindow: window) else { return true }
+        return exclusions.contains(application.id)
+    }
     // The failure seam lets tests exercise installation errors without installing a global tap.
     var createTap: (CGEventTapCallBack, UnsafeMutableRawPointer) -> CFMachPort? = { callback, context in
         CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
@@ -859,7 +1154,7 @@ final class LiveSession {
         recording = ShortcutRecording()
         hotKeys = HotKeyRegistration(api: hotKeyAPI, recording: recording)
         lifecycle = Lifecycle(adapter: EventAdapter(gesture: Gesture(settings: configuration.scroll)))
-        lifecycle.passesNewContact = { [weak self] in self?.settingsControl?.passes($0) ?? false }
+        lifecycle.passesNewContact = { [weak self] in self?.passesNewContact($0) ?? false }
         recording.commit = { [weak self] in self?.setShortcut($0) }
         recording.error = { [weak self] in self?.reportSettingsError($0) }
         hotKeys.toggle = { [weak self] in self?.toggleEnabled() }
@@ -870,17 +1165,17 @@ final class LiveSession {
         FileHandle.standardError.write(Data("pen-pan settings: \(message)\n".utf8))
         settingsError = message
         settingsControl?.refresh()
-        changed()
+        notifyChanged()
     }
 
     func setScroll(_ scroll: ScrollSettings) {
         guard lifecycle.mode != .quitting, scroll.sensitivity.isFinite,
               (0.05...2).contains(scroll.sensitivity) else { return }
-        configuration = Configuration(scroll: scroll, shortcut: configuration.shortcut)
+        configuration = Configuration(scroll: scroll, shortcut: configuration.shortcut, excludedApps: configuration.excludedApps)
         lifecycle.adapter.gesture.settings = scroll
         store?.save(configuration)
         settingsControl?.refresh()
-        changed()
+        notifyChanged()
     }
 
     func setShortcut(_ shortcut: Shortcut?) {
@@ -889,12 +1184,20 @@ final class LiveSession {
         do {
             try hotKeys.installHandler()
             try hotKeys.replace(with: shortcut)
-            configuration = Configuration(scroll: configuration.scroll, shortcut: shortcut)
+            configuration = Configuration(scroll: configuration.scroll, shortcut: shortcut, excludedApps: configuration.excludedApps)
             store?.save(configuration)
             if hotKeys.cleanupPending { reportSettingsError("A failed shortcut reservation still needs cleanup. Quit to release it.") }
         } catch { reportSettingsError(String(describing: error)) }
         settingsControl?.refresh()
-        changed()
+        notifyChanged()
+    }
+
+    func setExcludedApps(_ applications: Set<ApplicationID>) {
+        guard lifecycle.mode != .quitting, applications != configuration.excludedApps else { return }
+        configuration = Configuration(scroll: configuration.scroll, shortcut: configuration.shortcut, excludedApps: applications)
+        store?.save(configuration)
+        settingsControl?.refresh()
+        notifyChanged()
     }
 
     func startHotKeys() {
@@ -916,7 +1219,7 @@ final class LiveSession {
 
     func toggleEnabled() {
         guard lifecycle.mode != .quitting else { return }
-        defer { changed() }
+        defer { notifyChanged() }
         if lifecycle.mode == .on {
             lifecycle.setEnabled(false)
         } else {
@@ -934,7 +1237,7 @@ final class LiveSession {
             let result = session.lifecycle.handle(type, event, post: { $0.tapPostEvent(proxy) }, reenable: {
                 if let tap = session.tap { CGEvent.tapEnable(tap: tap, enable: true) }
             })
-            session.changed()
+            session.notifyChanged()
             return result.map { Unmanaged.passUnretained($0) }
         }
         do {
@@ -952,10 +1255,10 @@ final class LiveSession {
             CGEvent.tapEnable(tap: tap, enable: true)
         } catch {
             lifecycle.observationFailed(error)
-            changed()
+            notifyChanged()
             throw error
         }
-        changed()
+        notifyChanged()
     }
 
     func requestQuit() {
@@ -963,7 +1266,7 @@ final class LiveSession {
         recording.cancel()
         hotKeys.teardown()
         settingsControl?.remove()
-        changed()
+        notifyChanged()
     }
 
     func teardown() {
@@ -1076,7 +1379,7 @@ struct PenPan {
     static func main() {
         guard CommandLine.arguments.count == 2,
               ["--run", "--menu"].contains(CommandLine.arguments[1]) else {
-            print("Usage: pen-pan --menu | --run\nNo input tap is installed without --menu or --run.\n--menu starts OFF with a native ON/OFF menu and Quit.\n--run starts ON; stop with Ctrl-C or SIGTERM, then lift the pen.\nSettings... configures sensitivity, reversal and an optional discrete toggle shortcut.\nFresh sensitivity is 0.30x; threshold is 6px. No default shortcut.\nSaved UI sensitivity outranks PENPAN_SENS; PENPAN_DEADZONE seeds the threshold.")
+            print("Usage: pen-pan --menu | --run\nNo input tap is installed without --menu or --run.\n--menu starts OFF with a native ON/OFF menu and Quit.\n--run starts ON; stop with Ctrl-C or SIGTERM, then lift the pen.\nSettings... has live ON/OFF, scrolling, an optional toggle shortcut and excluded apps.\nFresh sensitivity is 0.30x; threshold is 6px. No default shortcut or excluded apps.\nRecord Control/Option/Command + key, or explicitly choose F13-F20 alone.\nSaved UI sensitivity outranks PENPAN_SENS; PENPAN_DEADZONE seeds the threshold.")
             return
         }
         do {
