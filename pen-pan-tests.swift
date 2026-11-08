@@ -2402,15 +2402,41 @@ struct PenPanTests {
                     settings.reverse.state = reversed ? .on : .off
                     try require(settings.reverse.sendAction(settings.reverse.action, to: settings.reverse.target), "reverse action failed")
                     for sign in [-1.0, 1.0] {
+                        scroll.layoutSubtreeIfNeeded()
+                        try require(scroll.window === window && window.isVisible && !scroll.needsLayout &&
+                                    scroll.contentView.bounds.width > 0 && scroll.contentView.bounds.height > 0,
+                                    "native scroll fixture not ready: clip=\(scroll.contentView.bounds), document=\(scroll.contentView.documentRect)")
                         scroll.contentView.scroll(to: CGPoint(x: 400, y: 400))
                         scroll.reflectScrolledClipView(scroll.contentView)
+                        try require(scroll.contentView.bounds.origin == CGPoint(x: 400, y: 400), "native scroll fixture did not reset")
+                        try require(session.configuration.scroll == ScrollSettings(reversed: reversed, axes: axes) &&
+                                    trace.adapter.gesture.settings == session.configuration.scroll, "native action changed sensitivity or routing settings")
                         trace.output = []
                         trace.send(mouse(.leftMouseDown))
                         trace.send(mouse(.leftMouseUp, 100 + sign * 20, 100 + sign * 20))
-                        for event in trace.output { scroll.scrollWheel(with: NSEvent(cgEvent: event)!) }
-                        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.15))
                         let delta = sign * (reversed ? -6.0 : 6.0)
-                        let expected = CGPoint(x: axes == .vertical ? 400 : 400 - delta, y: axes == .horizontal ? 400 : 400 - delta)
+                        let x = axes == .vertical ? 0 : delta
+                        let y = axes == .horizontal ? 0 : delta
+                        try require(trace.types == [.scrollWheel], "native pan did not emit exactly one wheel: \(trace.types)")
+                        let event = trace.output[0]
+                        let native = NSEvent(cgEvent: event)!
+                        print("NATIVE emitted axes=\(axes.rawValue) reversed=\(reversed) sign=\(sign) sensitivity=\(session.configuration.scroll.sensitivity) CG=(\(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2)),\(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1))) NS=(\(native.scrollingDeltaX),\(native.scrollingDeltaY)) clip=\(scroll.contentView.bounds) document=\(scroll.contentView.documentRect)")
+                        try require(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2) == Int64(x) &&
+                                    event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1) == Int64(y) &&
+                                    event.getIntegerValueField(.scrollWheelEventIsContinuous) == 1 && native.type == .scrollWheel &&
+                                    native.hasPreciseScrollingDeltas && native.scrollingDeltaX == x && native.scrollingDeltaY == y,
+                                    "emitted native wheel differs from exact expected pixels (\(x),\(y))")
+                        let expected = CGPoint(x: 400 - x, y: 400 - y)
+                        func atExpectedOrigin() -> Bool {
+                            let origin = scroll.contentView.bounds.origin
+                            return abs(origin.x - expected.x) < 0.01 && abs(origin.y - expected.y) < 0.01
+                        }
+                        scroll.scrollWheel(with: native)
+                        // AppKit applies precise scrolling asynchronously; observe the single wheel, never resend it.
+                        let deadline = ProcessInfo.processInfo.systemUptime + 1
+                        while !atExpectedOrigin() && ProcessInfo.processInfo.systemUptime < deadline {
+                            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
+                        }
                         let origin = scroll.contentView.bounds.origin
                         print("NATIVE axes=\(axes.rawValue) reversed=\(reversed) sign=\(sign) origin=\(origin)")
                         try require(abs(origin.x - expected.x) < 0.01 && abs(origin.y - expected.y) < 0.01,
