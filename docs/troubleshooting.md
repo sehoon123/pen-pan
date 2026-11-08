@@ -1,5 +1,15 @@
 # Troubleshooting
 
+## Handle a downloaded binary warning
+
+The experimental v0.1.0 ZIP contains a standalone Apple Silicon (`arm64`) executable for macOS 26.0 or later, tested on macOS 26.6.2. It is ad-hoc signed, not Developer ID signed or notarized. It is not an app bundle or an Intel build.
+
+If macOS blocks the downloaded executable or warns that Apple cannot verify it, treat that as a Gatekeeper launch decision. First verify the archive against the separate `SHA256SUMS` asset as described in [Quick start](../README.md#use-the-experimental-v010-binary).
+
+Proceed only if you trust the download and choose to run it. Use macOS's normal per-item approval controls in **System Settings > Privacy & Security** when offered. You can decline and [build from source](../README.md#build-from-source) instead. Do not disable Gatekeeper or SIP, or edit the TCC permission database.
+
+Gatekeeper approval does not grant Accessibility access. Accessibility access cannot resolve a Gatekeeper launch block. Once the executable starts, follow the event-tap steps below if the menu reports an unavailable tap.
+
 ## Restore event-tap access
 
 If the menu stays **Pen Pan: OFF** and reports that it could not create an event tap:

@@ -2,9 +2,39 @@
 
 Pen Pan is an experimental macOS helper that turns pen drags into two-axis scrolling. While ON, a stationary pen tap becomes a click on release. Exclude an application to keep its native pen input while ON, or turn Pen Pan OFF to write, select text, or drag objects everywhere.
 
-This project distributes source, not a packaged or notarized app. It is not a touchscreen driver and does not add multitouch or zoom gestures.
+Pen Pan is available as source and an experimental standalone binary. It is not a touchscreen driver and does not add multitouch or zoom gestures.
 
 ## Quick start
+
+### Use the experimental v0.1.0 binary
+
+The standalone ZIP requires Apple Silicon (`arm64`) and macOS 26.0 or later. It was tested on macOS 26.6.2. It contains a command-line/menu helper, not an app bundle or Intel build. The executable is ad-hoc signed, not Developer ID signed or notarized.
+
+1. Open the repository's [Releases page](https://github.com/sehoon123/pen-pan/releases) and select the experimental **v0.1.0** prerelease. Download `pen-pan-v0.1.0-macos-arm64.zip` and the separate `SHA256SUMS` asset into the same directory.
+2. In Terminal, change to that directory and verify the archive before extraction:
+
+   ```sh
+   shasum -a 256 -c SHA256SUMS
+   ```
+
+   Continue only if the output reports `pen-pan-v0.1.0-macos-arm64.zip: OK`. If verification fails, stop and download both assets again.
+3. Extract the archive and check usage:
+
+   ```sh
+   unzip pen-pan-v0.1.0-macos-arm64.zip -d pen-pan-v0.1.0-macos-arm64 &&
+   cd pen-pan-v0.1.0-macos-arm64 &&
+   ./pen-pan --help
+   ```
+
+4. From the extracted directory, start menu mode:
+
+   ```sh
+   ./pen-pan --menu
+   ```
+
+macOS may block this unnotarized download. Decide whether to allow it through normal per-item macOS security controls, or use the source build below. See [Handle a downloaded binary warning](docs/troubleshooting.md#handle-a-downloaded-binary-warning) before proceeding.
+
+### Build from source
 
 You need macOS and Apple's command-line developer tools. If the tools are missing, run `xcode-select --install` first. Pen Pan uses the system AppKit, CoreGraphics, Carbon, and Darwin frameworks, with no external package dependencies.
 
