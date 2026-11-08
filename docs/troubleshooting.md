@@ -10,6 +10,10 @@ Proceed only if you trust the download and choose to run it. Use macOS's normal 
 
 Gatekeeper approval does not grant Accessibility access. Accessibility access cannot resolve a Gatekeeper launch block. Once the executable starts, follow the event-tap steps below if the menu reports an unavailable tap.
 
+## Find the new input controls
+
+The axes popup and **Hold Option for native pen input** checkbox are unreleased source-branch controls. The existing v0.1.0 ZIP does not contain them. The download remains v0.1.0 until a separate release is published. Building that release's source does not add these controls.
+
 ## Restore event-tap access
 
 If the menu stays **Pen Pan: OFF** and reports that it could not create an event tap:
@@ -50,6 +54,26 @@ An in-progress contact keeps its original settings. Saved sensitivity takes prio
 
 If a tap becomes a pan too readily, check whether your launch environment sets `PENPAN_DEADZONE`. Its default is six screen-coordinate pixels. Sensitivity and threshold do not calibrate physical pen tracking.
 
+## Restrict scrolling to one axis, unreleased
+
+1. Open **Settings...** in a build from the input-controls source branch.
+2. Choose **Vertical only** or **Horizontal only** in the axes popup. **Both axes** restores two-axis output.
+3. Lift the pen before testing the new mode.
+
+The six-pixel radial threshold is unchanged. A drag only along the suppressed axis still becomes a pan. It produces no scroll and does not become a click when you lift or return to the starting point. Use a stationary tap to click.
+
+## Use native Option input for one contact, unreleased
+
+1. Enable **Hold Option for native pen input** in Settings. It is OFF by default.
+2. Hold Option before touching the pen down.
+3. Lift the pen, then start another contact without Option to scroll again while ON outside excluded apps and the helper's UI.
+
+Option's normal destination-app actions remain. An Option-click that downloads a link, changes selection, or copies an object is not neutral input. Turn Pen Pan OFF or exclude the app when you need native input without Option.
+
+Adding Option after contact starts does not bypass an owned tap or pan. Releasing Option early or editing the preference does not change an already-passed contact. A preference edit does not reset a pan or revive a drain.
+
+If the contact still scrolls, confirm that the checkbox is enabled and that Option was held before contact. The tablet driver must include Option in the original pen-down flags. App-local tests do not prove physical driver delivery. Do not change driver settings solely to infer support. Record the tablet model, driver, macOS version, and destination app when reporting a mismatch.
+
 ## Restore writing, selection, or object dragging
 
 Choose **Turn OFF** in the menu or Settings, then lift the pen before starting another contact. To keep native pen input in one app while Pen Pan stays ON, open **Settings... > Excluded apps**, choose **Add application…**, and select the app.
@@ -85,4 +109,4 @@ If graceful shutdown remains stuck after release, use Activity Monitor to force 
 
 Include your macOS version, Swift version, processor architecture, tablet model and driver, target app, and steps to reproduce. State whether the problem occurs while ON or OFF. Omit private paths and unrelated input from reports.
 
-Physical pen tracking, calibration, multi-display behavior, and every-app compatibility remain unverified. Passing the app-local tests does not establish hardware support.
+Physical pen tracking, calibration, Option-flag delivery by tablet drivers, multi-display behavior, and every-app compatibility remain unverified. Passing the app-local tests does not establish hardware support.

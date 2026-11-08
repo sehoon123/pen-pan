@@ -53,6 +53,11 @@ private final class LifecycleTrace {
         lifecycle.observationStarted(leftButtonHeld: held)
         lifecycle.setEnabled(enabled)
     }
+    init(session: LiveSession, enabled: Bool = true) {
+        lifecycle = session.lifecycle
+        lifecycle.observationStarted(leftButtonHeld: false)
+        lifecycle.setEnabled(enabled)
+    }
     @discardableResult
     func send(_ event: CGEvent, as type: CGEventType? = nil) -> CGEvent? {
         let forwarded = lifecycle.handle(type ?? event.type, event, post: { self.output.append($0) },
@@ -1357,7 +1362,7 @@ struct PenPanTests {
         var recorderKey = true
         override var isKeyWindow: Bool { recorderKey }
         convenience init() {
-            self.init(contentRect: NSRect(x: 0, y: 0, width: 620, height: 600),
+            self.init(contentRect: NSRect(x: 0, y: 0, width: 620, height: 680),
                       styleMask: [.titled, .closable], backing: .buffered, defer: false)
         }
     }
@@ -1390,7 +1395,8 @@ struct PenPanTests {
                             settings.value.stringValue == "0.15x", "native controls not applied")
                 try require(try store.load(environment: [:]) == session.configuration, "native UI settings not saved")
                 let content = settings.window.contentView!
-                for view in [settings.sensitivity, settings.value, settings.reverse, settings.recorder, settings.clear, settings.message] {
+                for view in [settings.sensitivity, settings.value, settings.axes, settings.reverse, settings.optionNative,
+                             settings.inputHint, settings.recorder, settings.clear, settings.message] {
                     let frame = view.convert(view.bounds, to: content)
                     try require(content.bounds.contains(frame), "control clipped: \(view) at \(frame)")
                 }
@@ -1679,7 +1685,8 @@ struct PenPanTests {
                 try withApplicationFixture { url in
                     let fake = FakeHotKeys()
                     let key = try Shortcut(keyCode: UInt32(kVK_F20), modifiers: UInt32(shiftKey))
-                    let session = LiveSession(configuration: Configuration(scroll: ScrollSettings(sensitivity: 0.15, reversed: true)),
+                    let session = LiveSession(configuration: Configuration(scroll: ScrollSettings(sensitivity: 0.15, reversed: true, axes: .vertical),
+                                                                         optionNativeInput: true),
                                               store: store, hotKeyAPI: fake.api)
                     defer { session.teardown() }
                     session.setShortcut(key)
@@ -1703,8 +1710,8 @@ struct PenPanTests {
                     try require(session.configuration.excludedApps == [identifier] && settings.applicationRows == [identifier] &&
                                 settings.applications.selectedRow == 0 && settings.removeSelected.isEnabled && settings.add.isEnabled,
                                 "Add did not select saved row")
-                    try require(session.configuration.scroll == ScrollSettings(sensitivity: 0.15, reversed: true) &&
-                                session.configuration.shortcut == key && (try store.load(environment: [:])) == session.configuration,
+                    try require(session.configuration.scroll == ScrollSettings(sensitivity: 0.15, reversed: true, axes: .vertical) &&
+                                session.configuration.optionNativeInput && session.configuration.shortcut == key && (try store.load(environment: [:])) == session.configuration,
                                 "Add lost siblings or did not save")
                     settings.add.performClick(nil)
                     completions.last!(.OK)
@@ -1737,8 +1744,8 @@ struct PenPanTests {
             try withStore { store, _ in
                 let identifier = ApplicationID("org.penpan.Duplicate-\(UUID().uuidString)")!
                 let key = try Shortcut(keyCode: UInt32(kVK_F20), modifiers: UInt32(shiftKey))
-                let expected = Configuration(scroll: ScrollSettings(sensitivity: 0.15, reversed: true),
-                                             shortcut: key, excludedApps: [identifier])
+                let expected = Configuration(scroll: ScrollSettings(sensitivity: 0.15, reversed: true, axes: .horizontal),
+                                             shortcut: key, excludedApps: [identifier], optionNativeInput: true)
                 store.save(expected)
                 let session = LiveSession(configuration: expected, store: store, hotKeyAPI: FakeHotKeys().api)
                 defer { session.teardown() }
@@ -1906,6 +1913,8 @@ struct PenPanTests {
             session.prepareSettings(window: RecorderWindow())
             let settings = session.settingsControl!
             settings.window.orderBack(nil)
+            session.setScroll(ScrollSettings(axes: .horizontal))
+            session.setOptionNativeInput(true)
             let longID = ApplicationID("org.example." + String(repeating: "VeryLongApplicationIdentifier", count: 8))!
             session.setExcludedApps([longID])
             settings.applications.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
@@ -1922,12 +1931,12 @@ struct PenPanTests {
                 let frame = view.convert(view.bounds, to: content)
                 try require(frame.width > 0 && frame.height > 0 && content.bounds.contains(frame), "rendered control clipped: \(view) \(frame)")
             }
-            for view in [settings.status, settings.toggle, settings.sensitivity, settings.value, settings.reverse,
-                         settings.recorder, settings.clear, settings.message, settings.applicationScroll,
+            for view in [settings.status, settings.toggle, settings.sensitivity, settings.value, settings.axes, settings.reverse,
+                         settings.optionNative, settings.inputHint, settings.recorder, settings.clear, settings.message, settings.applicationScroll,
                          settings.add, settings.removeSelected, settings.applicationMessage] {
                 try withinBounds(view)
             }
-            for label in [settings.status, settings.message, settings.applicationMessage] {
+            for label in [settings.status, settings.inputHint, settings.message, settings.applicationMessage] {
                 let required = label.cell!.cellSize(forBounds: NSRect(x: 0, y: 0, width: label.bounds.width, height: 1000)).height
                 try require(required <= label.bounds.height, "wrapping message clipped: \(required) > \(label.bounds.height)")
             }
@@ -1937,8 +1946,8 @@ struct PenPanTests {
                         settings.applications.accessibilityLabel()?.contains("Excluded applications") == true &&
                         settings.add.accessibilityIdentifier() == "penpan.exclusions.add" &&
                         settings.removeSelected.accessibilityIdentifier() == "penpan.exclusions.remove", "new accessibility IDs/labels missing")
-            let keyViews: [NSView] = [settings.toggle, settings.sensitivity, settings.reverse, settings.recorder, settings.clear,
-                                    settings.applications, settings.add, settings.removeSelected]
+            let keyViews: [NSView] = [settings.toggle, settings.sensitivity, settings.axes, settings.reverse, settings.optionNative,
+                                    settings.recorder, settings.clear, settings.applications, settings.add, settings.removeSelected]
             for index in keyViews.indices {
                 try require(keyViews[index].nextKeyView === keyViews[(index + 1) % keyViews.count], "keyboard order broken")
             }
@@ -1959,10 +1968,463 @@ struct PenPanTests {
         }
     }
 
+    private static func inputControlsOffline() {
+        test("axes preserve signs, reversal and allowed fractions through release for every mode") {
+            for axes in ScrollAxes.allCases {
+                for reversed in [false, true] {
+                    for sx in [-1.0, 1.0] {
+                        for sy in [-1.0, 1.0] {
+                            let trace = Trace(settings: ScrollSettings(sensitivity: 0.25, reversed: reversed, axes: axes))
+                            trace.send(mouse(.leftMouseDown))
+                            for distance in [6.5, 10.5] {
+                                trace.send(mouse(.leftMouseDragged, 100 + sx * distance, 100 + sy * distance))
+                            }
+                            trace.send(mouse(.leftMouseUp, 100 + sx * 14, 100 + sy * 14, subtype: 0))
+                            let direction = reversed ? -1.0 : 1.0
+                            let x = axes == .vertical ? 0 : Int64(sx * direction)
+                            let y = axes == .horizontal ? 0 : Int64(sy * direction)
+                            try require(trace.types == [.scrollWheel, .scrollWheel, .scrollWheel] &&
+                                        trace.xs == [x, x, x] && trace.ys == [y, y, y],
+                                        "axis/fraction mismatch \(axes) \(reversed) \(sx),\(sy): \(trace.xs),\(trace.ys)")
+                        }
+                    }
+                }
+            }
+        }
+        test("every axis retains six-pixel radial intent including diagonal and release crossing") {
+            for axes in ScrollAxes.allCases {
+                let trace = Trace(settings: ScrollSettings(sensitivity: 1, axes: axes))
+                trace.send(mouse(.leftMouseDown))
+                trace.send(mouse(.leftMouseDragged, 104, 104))
+                try require(trace.output.isEmpty, "intent committed below six")
+                trace.send(mouse(.leftMouseUp, 104.5, 104.5))
+                try require(trace.types == [.scrollWheel] && trace.xs == [axes == .vertical ? 0 : 4] &&
+                            trace.ys == [axes == .horizontal ? 0 : 4], "diagonal release ignored radial intent")
+                let release = Trace(settings: ScrollSettings(sensitivity: 1, axes: axes))
+                release.send(mouse(.leftMouseDown))
+                release.send(mouse(.leftMouseUp, 106, 106))
+                try require(release.types == [.scrollWheel] && release.xs == [axes == .vertical ? 0 : 6] &&
+                            release.ys == [axes == .horizontal ? 0 : 6], "release crossing lost")
+            }
+        }
+        test("suppressed-only out-and-back drags commit a pan without buttons or remainder catch-up") {
+            for axes in [ScrollAxes.vertical, .horizontal] {
+                let trace = Trace(settings: ScrollSettings(sensitivity: 0.25, axes: axes))
+                trace.tap(count: 1, time: 1)
+                trace.output = []
+                trace.send(mouse(.leftMouseDown, count: 2, time: 1.1))
+                trace.send(mouse(.leftMouseDragged, axes == .vertical ? 108 : 100, axes == .horizontal ? 108 : 100))
+                trace.send(mouse(.leftMouseDragged, 100, 100))
+                trace.send(mouse(.leftMouseUp, count: 2, time: 1.15))
+                try require(trace.output.isEmpty, "suppressed pan became a click or scroll")
+                trace.tap(count: 3, time: 1.2)
+                try require(trace.counts == [1, 1], "suppressed pan retained click grouping")
+                trace.output = []
+                trace.adapter.gesture.settings = ScrollSettings(sensitivity: 0.25)
+                trace.send(mouse(.leftMouseDown, time: 2))
+                trace.send(mouse(.leftMouseUp, 108, 108, time: 2.05))
+                try require(trace.types == [.scrollWheel] && trace.xs == [2] && trace.ys == [2], "blocked remainder escaped into next contact")
+            }
+        }
+        test("axis changes snapshot pending and panning contacts and advance both coordinates") {
+            for first in ScrollAxes.allCases {
+                for next in ScrollAxes.allCases {
+                    for panning in [false, true] {
+                        let session = LiveSession(configuration: Configuration(scroll: ScrollSettings(sensitivity: 0.25, axes: first)))
+                        let trace = LifecycleTrace(session: session)
+                        trace.send(mouse(.leftMouseDown))
+                        if panning { trace.send(mouse(.leftMouseDragged, 106, 110)) }
+                        session.setScroll(ScrollSettings(sensitivity: 0.5, reversed: true, axes: next))
+                        trace.send(mouse(.leftMouseDragged, 110, 114))
+                        trace.send(mouse(.leftMouseUp, 114, 118))
+                        let sumX = trace.output.reduce(0) { $0 + $1.getIntegerValueField(.scrollWheelEventPointDeltaAxis2) }
+                        let sumY = trace.output.reduce(0) { $0 + $1.getIntegerValueField(.scrollWheelEventPointDeltaAxis1) }
+                        try require(trace.types.allSatisfy { $0 == .scrollWheel } && sumX == (first == .vertical ? 0 : 3) &&
+                                    sumY == (first == .horizontal ? 0 : 4), "contact settings or consecutive coordinates changed")
+                        trace.output = []
+                        trace.send(mouse(.leftMouseDown))
+                        trace.send(mouse(.leftMouseUp, 114, 118))
+                        try require(trace.types == [.scrollWheel] &&
+                                    trace.output[0].getIntegerValueField(.scrollWheelEventPointDeltaAxis2) == (next == .vertical ? 0 : -7) &&
+                                    trace.output[0].getIntegerValueField(.scrollWheelEventPointDeltaAxis1) == (next == .horizontal ? 0 : -9),
+                                    "new contact missed axis edit or caught up blocked motion")
+                    }
+                }
+            }
+        }
+        test("axes validate raw, scaled and accumulated arithmetic before suppression and drain failures") {
+            for axes in ScrollAxes.allCases {
+                let trace = LifecycleTrace(settings: ScrollSettings(sensitivity: Double.greatestFiniteMagnitude, axes: axes))
+                trace.send(mouse(.leftMouseDown))
+                trace.send(mouse(.leftMouseDragged, axes == .horizontal ? 100 : 110, axes == .vertical ? 100 : 110))
+                trace.send(mouse(.leftMouseUp))
+                try require(trace.output.isEmpty && trace.lifecycle.contact == .idle, "suppression concealed scaled overflow")
+                let raw = Trace(settings: ScrollSettings(sensitivity: 0.05, axes: axes))
+                raw.send(mouse(.leftMouseDown, -1e308, -1e308))
+                raw.send(mouse(.leftMouseUp, 1e308, 1e308))
+                try require(raw.output.isEmpty, "raw subtraction overflow emitted scroll")
+                let accumulation = Trace(settings: ScrollSettings(sensitivity: 1e306, axes: axes))
+                accumulation.send(mouse(.leftMouseDown, 0, 0))
+                accumulation.send(mouse(.leftMouseDragged, 100, 100))
+                try require(accumulation.types == [.scrollWheel], "finite large delta did not clamp")
+                accumulation.output = []
+                accumulation.send(mouse(.leftMouseDragged, 200, 200))
+                accumulation.send(mouse(.leftMouseUp, 200, 200))
+                try require(accumulation.output.isEmpty, "accumulation overflow emitted or clicked")
+                if axes != .both {
+                    let blocked = Trace(settings: ScrollSettings(sensitivity: 1e306, axes: axes))
+                    blocked.send(mouse(.leftMouseDown, 0, 0))
+                    for distance in [100.0, 200.0, 300.0] {
+                        blocked.send(mouse(.leftMouseDragged, axes == .vertical ? distance : 0, axes == .horizontal ? distance : 0))
+                    }
+                    try require(blocked.output.isEmpty, "blocked axis emitted output")
+                    blocked.send(mouse(.leftMouseDragged, axes == .vertical ? 300 : 1, axes == .horizontal ? 300 : 1))
+                    try require(blocked.types == [.scrollWheel] && blocked.xs == [axes == .vertical ? 0 : Int64(Int32.max)] &&
+                                blocked.ys == [axes == .horizontal ? 0 : Int64(Int32.max)], "blocked accumulation overflow cancelled later allowed motion")
+                    blocked.adapter.gesture.requestStop()
+                    blocked.send(mouse(.leftMouseUp))
+                }
+            }
+        }
+        test("legacy and fresh stores default to Both and Option OFF without migration writes") {
+            try withStore { store, defaults in
+                let fresh = try store.load(environment: [:])
+                try require(fresh.scroll.axes == .both && !fresh.optionNativeInput &&
+                            defaults.object(forKey: "axes") == nil && defaults.object(forKey: "optionNativeInput") == nil,
+                            "fresh load wrote new preferences")
+                defaults.set(0.15, forKey: "sensitivity")
+                defaults.set(true, forKey: "reversed")
+                defaults.set(["org.example.App"], forKey: "excludedApps")
+                let before = defaults.dictionaryRepresentation() as NSDictionary
+                let legacy = try store.load(environment: [:])
+                try require(legacy.scroll == ScrollSettings(sensitivity: 0.15, reversed: true) &&
+                            legacy.excludedApps == [ApplicationID("org.example.App")!] && !legacy.optionNativeInput &&
+                            before.isEqual(to: defaults.dictionaryRepresentation()), "legacy load changed siblings or wrote migration")
+            }
+        }
+        test("new storage fields parse independently with strict Boolean and exact enum strings") {
+            try withStore { store, defaults in
+                let key = try Shortcut(keyCode: UInt32(kVK_F13), modifiers: 0)
+                let original = Configuration(scroll: ScrollSettings(sensitivity: 0.15, reversed: true, axes: .horizontal),
+                                             shortcut: key, excludedApps: [ApplicationID("org.example.App")!], optionNativeInput: true)
+                for axes in ScrollAxes.allCases {
+                    store.save(Configuration(scroll: ScrollSettings(axes: axes), optionNativeInput: true))
+                    try require(defaults.string(forKey: "axes") == axes.rawValue &&
+                                (try store.load(environment: [:])).scroll.axes == axes &&
+                                (try store.load(environment: [:])).optionNativeInput, "new schema failed round trip")
+                }
+                for invalid: Any in [1, 0, 0.5, "true", "false", [true], ["enabled": true]] {
+                    store.save(original)
+                    // UserDefaults can retain an equal Boolean when overwriting it with numeric 1 or 0.
+                    defaults.removeObject(forKey: "optionNativeInput")
+                    defaults.set(invalid, forKey: "optionNativeInput")
+                    let before = defaults.dictionaryRepresentation() as NSDictionary
+                    let loaded = try store.load(environment: [:])
+                    try require(!loaded.optionNativeInput && loaded.scroll == original.scroll && loaded.shortcut == key &&
+                                loaded.excludedApps == original.excludedApps && before.isEqual(to: defaults.dictionaryRepresentation()),
+                                "Boolean impostor \(invalid) accepted, siblings lost, or load wrote")
+                }
+                for invalid: Any in [true, 1, "Both", "vertical-only", "", ["vertical"], ["axes": "vertical"]] {
+                    store.save(original)
+                    defaults.set(invalid, forKey: "axes")
+                    let before = defaults.dictionaryRepresentation() as NSDictionary
+                    let loaded = try store.load(environment: [:])
+                    try require(loaded.scroll.axes == .both && loaded.scroll.sensitivity == 0.15 && loaded.scroll.reversed &&
+                                loaded.optionNativeInput && loaded.shortcut == key && loaded.excludedApps == original.excludedApps &&
+                                before.isEqual(to: defaults.dictionaryRepresentation()), "axis impostor accepted or valid siblings lost")
+                }
+                defaults.set("broken", forKey: "sensitivity")
+                defaults.set("broken", forKey: "reversed")
+                defaults.set("broken", forKey: "shortcut")
+                defaults.set("broken", forKey: "excludedApps")
+                defaults.set("vertical", forKey: "axes")
+                let loaded = try store.load(environment: [:])
+                try require(loaded.scroll == ScrollSettings(axes: .vertical) && loaded.optionNativeInput, "invalid old fields erased new fields")
+            }
+        }
+        test("all four setters and failed shortcut transactions preserve old and new siblings and ignore Quit edits") {
+            try withStore { store, _ in
+                let fake = FakeHotKeys()
+                let session = LiveSession(store: store, hotKeyAPI: fake.api)
+                defer { session.teardown() }
+                let key = try Shortcut(keyCode: UInt32(kVK_F13), modifiers: 0)
+                let candidate = try Shortcut(keyCode: UInt32(kVK_F14), modifiers: 0)
+                let apps: Set<ApplicationID> = [ApplicationID("org.example.App")!]
+                let scroll = ScrollSettings(sensitivity: 0.15, reversed: true, axes: .vertical)
+                session.setOptionNativeInput(true)
+                session.setScroll(scroll)
+                session.setShortcut(key)
+                session.setExcludedApps(apps)
+                let expected = Configuration(scroll: scroll, shortcut: key, excludedApps: apps, optionNativeInput: true)
+                try require(session.configuration == expected && (try store.load(environment: [:])) == expected, "setter lost siblings")
+                fake.conflict.insert(candidate.keyCode)
+                session.setShortcut(candidate)
+                fake.failCheck = true
+                session.setShortcut(candidate)
+                fake.failCheck = false
+                fake.failRemoval = Set(fake.active.keys)
+                session.setShortcut(nil)
+                try require(session.configuration == expected && (try store.load(environment: [:])) == expected, "failed transaction changed configuration")
+                fake.failRemoval = []
+                session.setOptionNativeInput(false)
+                try require(session.configuration == Configuration(scroll: scroll, shortcut: key, excludedApps: apps), "Option setter reset siblings")
+                session.setOptionNativeInput(true)
+                session.requestQuit()
+                session.setScroll(ScrollSettings())
+                session.setShortcut(nil)
+                session.setExcludedApps([])
+                session.setOptionNativeInput(false)
+                try require(session.configuration == expected && (try store.load(environment: [:])) == expected, "terminal setter saved")
+            }
+        }
+        test("Option-native passes original flagged objects through subtype-0 release with zero target lookups") {
+            for releaseSubtype: Int64 in [0, 1] {
+                let app = ApplicationID("org.example.App")!
+                let session = LiveSession(configuration: Configuration(scroll: ScrollSettings(axes: .vertical), excludedApps: [app], optionNativeInput: true))
+                let trace = LifecycleTrace(session: session)
+                var hits = 0
+                var owners = 0
+                var bundles = 0
+                session.windowAtPoint = { _ in hits += 1; return 42 }
+                session.targetResolver = PointerTargetResolver(windowInfo: {
+                    owners += 1; return [[kCGWindowNumber as String: $0, kCGWindowOwnerPID as String: 700]]
+                }, bundleIdentifier: { _ in bundles += 1; return "org.example.Other" })
+                let down = mouse(.leftMouseDown, flags: [.maskAlternate, .maskShift])
+                try require(trace.send(down) === down && down.flags == [.maskAlternate, .maskShift], "Option down changed")
+                session.setOptionNativeInput(false)
+                session.setScroll(ScrollSettings(axes: .horizontal))
+                for event in [mouse(.leftMouseDragged, 120, flags: .maskCommand), mouse(.leftMouseUp, 120, subtype: releaseSubtype)] {
+                    let flags = event.flags
+                    try require(trace.send(event) === event && event.flags == flags, "passed object or flags changed after edit/release")
+                }
+                try require(hits == 0 && owners == 0 && bundles == 0 && trace.output.count == 3, "bypass resolved target or synthesized output")
+                trace.output = []
+                trace.send(mouse(.leftMouseDown))
+                trace.send(mouse(.leftMouseUp, 120, 120))
+                try require(trace.types == [.scrollWheel] && hits == 1 && owners == 1 && bundles == 1 &&
+                            trace.output[0].getIntegerValueField(.scrollWheelEventPointDeltaAxis1) == 0, "next non-Option contact failed")
+            }
+        }
+        test("Option released early stays native while the next non-Option contact scrolls with preference still enabled") {
+            let session = LiveSession(configuration: Configuration(scroll: ScrollSettings(sensitivity: 1), optionNativeInput: true))
+            let trace = LifecycleTrace(session: session)
+            let down = mouse(.leftMouseDown, flags: .maskAlternate)
+            try require(trace.send(down) === down, "Option down consumed")
+            for event in [mouse(.leftMouseDragged, 120), mouse(.leftMouseUp, 120, subtype: 0)] {
+                try require(trace.send(event) === event && event.flags.isEmpty, "early modifier release stole contact or rewrote flags")
+            }
+            trace.output = []
+            trace.send(mouse(.leftMouseDown))
+            trace.send(mouse(.leftMouseUp, 120))
+            try require(trace.types == [.scrollWheel] && session.configuration.optionNativeInput, "lift did not resume scrolling with preference enabled")
+        }
+        test("Option eligibility runs only at eligible down and respects default target policy and fresh-down recovery") {
+            let session = LiveSession(configuration: Configuration(excludedApps: [ApplicationID("org.example.Excluded")!]))
+            let trace = LifecycleTrace(session: session, enabled: false)
+            var hits = 0
+            var owners = 0
+            session.windowAtPoint = { _ in hits += 1; return 42 }
+            session.targetResolver = PointerTargetResolver(windowInfo: {
+                owners += 1; return [[kCGWindowNumber as String: $0, kCGWindowOwnerPID as String: 700]]
+            }, bundleIdentifier: { _ in "org.example.Other" })
+            let down = mouse(.leftMouseDown, flags: .maskAlternate)
+            try require(trace.send(down) === down && hits == 0 && owners == 0, "OFF performed eligibility lookup")
+            session.setOptionNativeInput(true)
+            session.lifecycle.setEnabled(true)
+            let up = mouse(.leftMouseUp, subtype: 0)
+            try require(trace.send(up) === up && hits == 0, "preference stole OFF contact")
+            session.setOptionNativeInput(false)
+            trace.output = []
+            trace.send(down)
+            try require(hits == 1 && owners == 1 && trace.lifecycle.contact == .owned, "default OFF bypassed Option or skipped original target policy")
+            trace.send(mouse(.leftMouseUp), as: .tapDisabledByTimeout)
+            session.setOptionNativeInput(true)
+            try require(trace.send(down) === down && hits == 1 && owners == 1 && trace.lifecycle.contact == .passed,
+                        "fresh down after missed release failed existing recovery/bypass")
+            try require(trace.send(up) === up, "recovered native release lost")
+        }
+        test("Option at down is opt-in and later modifier or preference edits cannot steal pending or pan") {
+            for enabled in [false, true] {
+                for panning in [false, true] {
+                    let session = LiveSession(configuration: Configuration(scroll: ScrollSettings(sensitivity: 1), optionNativeInput: enabled))
+                    let trace = LifecycleTrace(session: session)
+                    trace.send(mouse(.leftMouseDown, flags: enabled ? [] : .maskAlternate))
+                    if panning { trace.send(mouse(.leftMouseDragged, 110, flags: .maskAlternate)) }
+                    session.setOptionNativeInput(!enabled)
+                    trace.send(mouse(.leftMouseDragged, 120, flags: .maskAlternate))
+                    trace.send(mouse(.leftMouseUp, 130, subtype: 0, flags: .maskAlternate))
+                    try require(trace.types.allSatisfy { $0 == .scrollWheel } &&
+                                trace.output.reduce(0) { $0 + $1.getIntegerValueField(.scrollWheelEventPointDeltaAxis2) } == 30 &&
+                                trace.lifecycle.contact == .idle, "late Option/preference cancelled or stole owned contact")
+                }
+            }
+        }
+        test("Option preferences cannot revive drains and preserve OFF, Quit and tap-disabled ownership") {
+            for action in ["off", "quit", "timeout", "userDisable"] {
+                for passed in [false, true] {
+                    let session = LiveSession(configuration: Configuration(optionNativeInput: true))
+                    let trace = LifecycleTrace(session: session)
+                    let down = mouse(.leftMouseDown, flags: passed ? .maskAlternate : [])
+                    try require((trace.send(down) === down) == passed, "wrong initial ownership")
+                    trace.output = []
+                    switch action {
+                    case "off": session.lifecycle.setEnabled(false); session.lifecycle.setEnabled(true)
+                    case "quit": session.requestQuit()
+                    default: trace.send(mouse(.leftMouseUp), as: action == "timeout" ? .tapDisabledByTimeout : .tapDisabledByUserInput)
+                    }
+                    session.setOptionNativeInput(false)
+                    session.setOptionNativeInput(true)
+                    for event in [mouse(.leftMouseDragged, 140, flags: .maskAlternate), mouse(.leftMouseUp, 140, subtype: 0)] {
+                        try require((trace.send(event) === event) == passed, "recovery/preference changed ownership")
+                    }
+                    try require(trace.output.count == (passed ? 2 : 0) && trace.lifecycle.contact == .idle, "drain revived output")
+                    if action == "quit" { try require(session.lifecycle.finished, "Quit did not finish") }
+                }
+            }
+            let session = LiveSession(configuration: Configuration(optionNativeInput: true))
+            let trace = LifecycleTrace(session: session, enabled: false)
+            let down = mouse(.leftMouseDown)
+            try require(trace.send(down) === down, "OFF changed down")
+            session.setOptionNativeInput(false)
+            session.lifecycle.setEnabled(true)
+            let up = mouse(.leftMouseUp, flags: .maskAlternate)
+            try require(trace.send(up) === up, "ON stole OFF contact after preference edit")
+        }
+        test("Option-native keeps mouse, Space, ordinary keys and trackpad input unchanged in every mode") {
+            for mode in [Lifecycle.Mode.off, .on, .quitting] {
+                let session = LiveSession(configuration: Configuration(optionNativeInput: true))
+                let trace = LifecycleTrace(session: session, enabled: mode == .on)
+                if mode == .quitting { session.requestQuit() }
+                var events = [CGEventType.leftMouseDown, .leftMouseDragged, .leftMouseUp].map { mouse($0, subtype: 0, flags: .maskAlternate) }
+                events.append(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 3, wheel2: 1, wheel3: 0)!)
+                for key: CGKeyCode in [49, 0] {
+                    for down in [true, false] { events.append(CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: down)!) }
+                }
+                for event in events { try require(trace.send(event) === event, "ordinary input changed") }
+            }
+        }
+    }
+
+    private static func inputControlsNative() {
+        test("native axes popup and Option checkbox actions preserve siblings, labels and terminal state") {
+            try withStore { store, _ in
+                let fake = FakeHotKeys()
+                let key = try Shortcut(keyCode: UInt32(kVK_F13), modifiers: 0)
+                let app = ApplicationID("org.example.App")!
+                let session = LiveSession(configuration: Configuration(excludedApps: [app]), store: store, hotKeyAPI: fake.api)
+                defer { session.teardown() }
+                session.setShortcut(key)
+                session.prepareSettings(window: RecorderWindow())
+                let settings = session.settingsControl!
+                settings.window.orderBack(nil)
+                try require(settings.axes.itemTitles == ScrollAxes.allCases.map(\.title) && settings.axes.indexOfSelectedItem == 0 &&
+                            settings.optionNative.state == .off, "native defaults/order differ from model")
+                try require(settings.axes.accessibilityIdentifier() == "penpan.axes.popup" &&
+                            settings.axes.accessibilityLabel() == "Scrolling axes" &&
+                            settings.optionNative.accessibilityIdentifier() == "penpan.option-native.checkbox" &&
+                            settings.optionNative.accessibilityLabel() == "Hold Option for native pen input" &&
+                            settings.inputHint.stringValue.contains("Hold before contact") &&
+                            settings.inputHint.stringValue.contains("Option's normal app behavior remains") &&
+                            settings.inputHint.stringValue.contains("Changes affect new contacts"), "native labels/hints missing")
+                let probe = ApplicationRowsProbe(settings)
+                settings.applications.dataSource = probe
+                settings.applications.reloadData()
+                settings.window.contentView!.layoutSubtreeIfNeeded()
+                let reads = probe.reads
+                settings.optionNative.performClick(nil)
+                for (index, axes) in ScrollAxes.allCases.enumerated() {
+                    settings.axes.selectItem(at: index)
+                    try require(settings.axes.sendAction(settings.axes.action, to: settings.axes.target), "popup action not routed")
+                    settings.sensitivity.doubleValue = 0.15
+                    try require(settings.sensitivity.sendAction(settings.sensitivity.action, to: settings.sensitivity.target), "slider action not routed")
+                    settings.reverse.performClick(nil)
+                    try require(session.configuration.scroll.axes == axes && session.configuration.scroll.sensitivity == 0.15 &&
+                                session.configuration.optionNativeInput && session.configuration.shortcut == key &&
+                                session.configuration.excludedApps == [app] && (try store.load(environment: [:])) == session.configuration,
+                                "native scrolling action lost siblings or did not save")
+                }
+                settings.optionNative.performClick(nil)
+                try require(!session.configuration.optionNativeInput && session.configuration.scroll.axes == .horizontal &&
+                            session.configuration.shortcut == key && session.configuration.excludedApps == [app], "Option action reset siblings")
+                try require(probe.reads == reads, "new control actions reloaded unchanged app list")
+                let expected = session.configuration
+                session.requestQuit()
+                try require(!settings.axes.isEnabled && !settings.optionNative.isEnabled, "new controls enabled during Quit")
+                _ = settings.axes.sendAction(settings.axes.action, to: settings.axes.target)
+                _ = settings.optionNative.sendAction(settings.optionNative.action, to: settings.optionNative.target)
+                try require(session.configuration == expected && (try store.load(environment: [:])) == expected, "terminal native action saved")
+            }
+        }
+        test("native Option contact reaches down-sensitive control immediately and bypasses visible Settings lookups") {
+            let session = LiveSession(configuration: Configuration(excludedApps: [ApplicationID("org.example.App")!], optionNativeInput: true))
+            defer { session.teardown() }
+            session.prepareSettings(window: RecorderWindow())
+            let settings = session.settingsControl!
+            settings.window.orderBack(nil)
+            let trace = LifecycleTrace(session: session)
+            var hits = 0
+            var owners = 0
+            session.windowAtPoint = { _ in hits += 1; return 42 }
+            session.targetResolver = PointerTargetResolver(windowInfo: { _ in owners += 1; return nil }, bundleIdentifier: { _ in nil })
+            let control = DownControl(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+            let down = mouse(.leftMouseDown, flags: .maskAlternate)
+            let forwarded = trace.send(down)
+            try require(forwarded === down, "Option down deferred")
+            let native = NSEvent(cgEvent: forwarded!)!
+            control.mouseDown(with: native)
+            try require(control.downs == 1 && control.ups == 0 && native.modifierFlags.contains(.option), "native Option down not immediate/flagged")
+            settings.optionNative.performClick(nil)
+            let up = mouse(.leftMouseUp, subtype: 0)
+            try require(trace.send(up) === up, "native preference stole passed release")
+            control.mouseUp(with: NSEvent(cgEvent: up)!)
+            try require(control.ups == 1 && hits == 0 && owners == 0 && trace.output.count == 2, "bypass queried target or generated events")
+        }
+        test("native NSScrollView observes explicit axes in both directions with reversal and no blocked motion") {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 300),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 300))
+            scroll.hasHorizontalScroller = true
+            scroll.hasVerticalScroller = true
+            scroll.usesPredominantAxisScrolling = false
+            scroll.documentView = Document(frame: NSRect(x: 0, y: 0, width: 1200, height: 1200))
+            window.contentView = scroll
+            window.orderBack(nil)
+            defer { window.orderOut(nil) }
+            let session = LiveSession()
+            defer { session.teardown() }
+            session.prepareSettings(window: RecorderWindow())
+            let settings = session.settingsControl!
+            let trace = LifecycleTrace(session: session)
+            for (index, axes) in ScrollAxes.allCases.enumerated() {
+                settings.axes.selectItem(at: index)
+                try require(settings.axes.sendAction(settings.axes.action, to: settings.axes.target), "axes action failed")
+                for reversed in [false, true] {
+                    settings.reverse.state = reversed ? .on : .off
+                    try require(settings.reverse.sendAction(settings.reverse.action, to: settings.reverse.target), "reverse action failed")
+                    for sign in [-1.0, 1.0] {
+                        scroll.contentView.scroll(to: CGPoint(x: 400, y: 400))
+                        scroll.reflectScrolledClipView(scroll.contentView)
+                        trace.output = []
+                        trace.send(mouse(.leftMouseDown))
+                        trace.send(mouse(.leftMouseUp, 100 + sign * 20, 100 + sign * 20))
+                        for event in trace.output { scroll.scrollWheel(with: NSEvent(cgEvent: event)!) }
+                        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.15))
+                        let delta = sign * (reversed ? -6.0 : 6.0)
+                        let expected = CGPoint(x: axes == .vertical ? 400 : 400 - delta, y: axes == .horizontal ? 400 : 400 - delta)
+                        let origin = scroll.contentView.bounds.origin
+                        print("NATIVE axes=\(axes.rawValue) reversed=\(reversed) sign=\(sign) origin=\(origin)")
+                        try require(abs(origin.x - expected.x) < 0.01 && abs(origin.y - expected.y) < 0.01,
+                                    "native axis output differs: \(origin), expected \(expected)")
+                    }
+                }
+            }
+        }
+    }
+
     static func main() {
         switch CommandLine.arguments.dropFirst().first {
-        case "--offline": offline(); lifecycleOffline(); settingsOffline(); exclusionsOffline()
-        case "--native": native(); settingsNative(); exclusionsNative()
+        case "--offline": offline(); lifecycleOffline(); settingsOffline(); exclusionsOffline(); inputControlsOffline()
+        case "--native": native(); settingsNative(); exclusionsNative(); inputControlsNative()
         default:
             print("Usage: pen-pan-tests --offline | --native\nNeither mode creates an event tap or posts global input. Native uses a temporary nonactivating app-local fixture.")
             return

@@ -4,15 +4,29 @@ import CoreGraphics
 import Darwin
 import Carbon
 
+enum ScrollAxes: String, CaseIterable {
+    case both, vertical, horizontal
+
+    var title: String {
+        switch self {
+        case .both: return "Both axes"
+        case .vertical: return "Vertical only"
+        case .horizontal: return "Horizontal only"
+        }
+    }
+}
+
 struct ScrollSettings: Equatable {
     let sensitivity: Double
     let threshold: Double
     let reversed: Bool
+    let axes: ScrollAxes
 
-    init(sensitivity: Double = 0.30, threshold: Double = 6, reversed: Bool = false) {
+    init(sensitivity: Double = 0.30, threshold: Double = 6, reversed: Bool = false, axes: ScrollAxes = .both) {
         self.sensitivity = sensitivity
         self.threshold = threshold
         self.reversed = reversed
+        self.axes = axes
     }
 
     static func environment(_ values: [String: String]) throws -> ScrollSettings {
@@ -159,10 +173,13 @@ struct Configuration: Equatable {
     let scroll: ScrollSettings
     let shortcut: Shortcut?
     let excludedApps: Set<ApplicationID>
-    init(scroll: ScrollSettings = ScrollSettings(), shortcut: Shortcut? = nil, excludedApps: Set<ApplicationID> = []) {
+    let optionNativeInput: Bool
+    init(scroll: ScrollSettings = ScrollSettings(), shortcut: Shortcut? = nil, excludedApps: Set<ApplicationID> = [],
+         optionNativeInput: Bool = false) {
         self.scroll = scroll
         self.shortcut = shortcut
         self.excludedApps = excludedApps
+        self.optionNativeInput = optionNativeInput
     }
 }
 
@@ -189,6 +206,9 @@ final class ConfigurationStore {
         let fallback = try ScrollSettings.environment(seed)
         let reverseValue = values["reversed"] as? NSNumber
         let reversed = reverseValue.flatMap { CFGetTypeID($0) == CFBooleanGetTypeID() ? $0.boolValue : nil } ?? false
+        let axes = (values["axes"] as? String).flatMap(ScrollAxes.init(rawValue:)) ?? .both
+        let optionValue = values["optionNativeInput"] as? NSNumber
+        let optionNativeInput = optionValue.flatMap { CFGetTypeID($0) == CFBooleanGetTypeID() ? $0.boolValue : nil } ?? false
         var shortcut: Shortcut?
         if let data = values["shortcut"] as? [String: Any], data.count == 2,
            let code = number(data["keyCode"]), let modifiers = number(data["modifiers"]),
@@ -197,13 +217,16 @@ final class ConfigurationStore {
             shortcut = try? Shortcut(keyCode: UInt32(code), modifiers: UInt32(modifiers))
         }
         return Configuration(scroll: ScrollSettings(sensitivity: sensitivity ?? fallback.sensitivity,
-                                                     threshold: fallback.threshold, reversed: reversed), shortcut: shortcut,
-                             excludedApps: Set((values["excludedApps"] as? [String] ?? []).compactMap(ApplicationID.init)))
+                                                     threshold: fallback.threshold, reversed: reversed, axes: axes), shortcut: shortcut,
+                             excludedApps: Set((values["excludedApps"] as? [String] ?? []).compactMap(ApplicationID.init)),
+                             optionNativeInput: optionNativeInput)
     }
 
     func save(_ configuration: Configuration) {
         defaults.set(configuration.scroll.sensitivity, forKey: "sensitivity")
         defaults.set(configuration.scroll.reversed, forKey: "reversed")
+        defaults.set(configuration.scroll.axes.rawValue, forKey: "axes")
+        defaults.set(configuration.optionNativeInput, forKey: "optionNativeInput")
         defaults.set(configuration.excludedApps.map(\.rawValue).sorted(), forKey: "excludedApps")
         if let shortcut = configuration.shortcut {
             defaults.set(["keyCode": shortcut.keyCode, "modifiers": shortcut.modifiers], forKey: "shortcut")
@@ -461,6 +484,9 @@ final class SettingsControl: NSObject, NSWindowDelegate, NSTableViewDataSource, 
     let sensitivity: NSSlider
     let value = NSTextField(labelWithString: "")
     let reverse = NSButton(checkboxWithTitle: "Reverse scroll direction", target: nil, action: nil)
+    let axes = NSPopUpButton(frame: .zero, pullsDown: false)
+    let optionNative = NSButton(checkboxWithTitle: "Hold Option for native pen input", target: nil, action: nil)
+    let inputHint = NSTextField(wrappingLabelWithString: "Hold before contact. Option's normal app behavior remains. Changes affect new contacts.")
     let recorder: ShortcutRecorder
     let clear = NSButton(title: "Clear", target: nil, action: nil)
     let message = NSTextField(wrappingLabelWithString: "")
@@ -482,7 +508,7 @@ final class SettingsControl: NSObject, NSWindowDelegate, NSTableViewDataSource, 
 
     init(session: LiveSession, window: NSWindow? = nil) {
         self.session = session
-        self.window = window ?? NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 600),
+        self.window = window ?? NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 680),
                                         styleMask: [.titled, .closable], backing: .buffered, defer: false)
         sensitivity = NSSlider(value: session.configuration.scroll.sensitivity, minValue: 0.05, maxValue: 2,
                                target: nil, action: nil)
@@ -507,6 +533,16 @@ final class SettingsControl: NSObject, NSWindowDelegate, NSTableViewDataSource, 
         reverse.target = self
         reverse.action = #selector(scrollChanged(_:))
         reverse.setAccessibilityIdentifier("penpan.reverse.checkbox")
+        axes.addItems(withTitles: ScrollAxes.allCases.map(\.title))
+        axes.target = self
+        axes.action = #selector(scrollChanged(_:))
+        axes.setAccessibilityIdentifier("penpan.axes.popup")
+        axes.setAccessibilityLabel("Scrolling axes")
+        optionNative.target = self
+        optionNative.action = #selector(optionNativeChanged(_:))
+        optionNative.setAccessibilityIdentifier("penpan.option-native.checkbox")
+        optionNative.setAccessibilityLabel("Hold Option for native pen input")
+        inputHint.setAccessibilityIdentifier("penpan.input.hint")
         clear.target = self
         clear.action = #selector(clearShortcut(_:))
         clear.setAccessibilityIdentifier("penpan.shortcut.clear")
@@ -542,17 +578,16 @@ final class SettingsControl: NSObject, NSWindowDelegate, NSTableViewDataSource, 
         statusRow.distribution = .fill
         status.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let sensitivityRow = NSStackView(views: [NSTextField(labelWithString: "Sensitivity"), sensitivity, value])
-        let scrollHint = NSTextField(labelWithString: "Changes apply after pen release.")
-        scrollHint.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        scrollHint.textColor = .secondaryLabelColor
-        let reverseRow = NSStackView(views: [reverse, scrollHint])
+        inputHint.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        inputHint.textColor = .secondaryLabelColor
+        let reverseRow = NSStackView(views: [axes, reverse])
         let shortcutRow = NSStackView(views: [recorder, clear])
         let hint = NSTextField(wrappingLabelWithString: "Press and release Control, Option or Command + key, or F13–F20 alone. Esc cancels. Physical US key names; other apps' commands may conflict.")
         hint.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         let exclusionHint = NSTextField(labelWithString: "Keep handwriting and native drags in these apps while ON.")
         exclusionHint.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         let applicationActions = NSStackView(views: [add, removeSelected])
-        let stack = NSStackView(views: [statusRow, heading("Scrolling"), sensitivityRow, reverseRow,
+        let stack = NSStackView(views: [statusRow, heading("Scrolling"), sensitivityRow, reverseRow, optionNative, inputHint,
                                         heading("Toggle shortcut"), shortcutRow, hint, message,
                                         heading("Excluded apps"), exclusionHint, applicationScroll,
                                         applicationActions, applicationMessage])
@@ -571,6 +606,8 @@ final class SettingsControl: NSObject, NSWindowDelegate, NSTableViewDataSource, 
             toggle.widthAnchor.constraint(equalToConstant: 110),
             sensitivity.widthAnchor.constraint(equalToConstant: 280),
             value.widthAnchor.constraint(equalToConstant: 56),
+            inputHint.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            inputHint.heightAnchor.constraint(equalToConstant: 30),
             recorder.widthAnchor.constraint(equalToConstant: 220),
             hint.widthAnchor.constraint(equalTo: stack.widthAnchor),
             hint.heightAnchor.constraint(equalToConstant: 34),
@@ -581,7 +618,7 @@ final class SettingsControl: NSObject, NSWindowDelegate, NSTableViewDataSource, 
             applicationMessage.widthAnchor.constraint(equalTo: stack.widthAnchor),
             applicationMessage.heightAnchor.constraint(equalToConstant: 34)
         ])
-        let keyViews: [NSView] = [toggle, sensitivity, reverse, recorder, clear, applications, add, removeSelected]
+        let keyViews: [NSView] = [toggle, sensitivity, axes, reverse, optionNative, recorder, clear, applications, add, removeSelected]
         self.window.autorecalculatesKeyViewLoop = false
         for index in keyViews.indices { keyViews[index].nextKeyView = keyViews[(index + 1) % keyViews.count] }
         self.window.initialFirstResponder = toggle
@@ -616,6 +653,8 @@ final class SettingsControl: NSObject, NSWindowDelegate, NSTableViewDataSource, 
         status.stringValue = lifecycle.status
         toggle.title = lifecycle.mode == .on ? "Turn OFF" : (lifecycle.observing ? "Turn ON" : "Retry ON")
         toggle.isEnabled = lifecycle.mode != .quitting
+        axes.isEnabled = lifecycle.mode != .quitting
+        optionNative.isEnabled = lifecycle.mode != .quitting
     }
     func refresh() {
         refreshStatus()
@@ -623,6 +662,8 @@ final class SettingsControl: NSObject, NSWindowDelegate, NSTableViewDataSource, 
         sensitivity.doubleValue = scroll.sensitivity
         value.stringValue = String(format: "%.2fx", scroll.sensitivity)
         reverse.state = scroll.reversed ? .on : .off
+        axes.selectItem(at: ScrollAxes.allCases.firstIndex(of: scroll.axes)!)
+        optionNative.state = session.configuration.optionNativeInput ? .on : .off
         switch session.recording.state {
         case .idle: recorder.title = session.configuration.shortcut?.label ?? "Record shortcut…"
         case .listening: recorder.title = "Press a shortcut…"
@@ -686,8 +727,10 @@ final class SettingsControl: NSObject, NSWindowDelegate, NSTableViewDataSource, 
     @objc private func toggleEnabled(_ sender: Any?) { session.toggleEnabled() }
     @objc private func scrollChanged(_ sender: Any?) {
         session.setScroll(ScrollSettings(sensitivity: sensitivity.doubleValue,
-                                        threshold: session.configuration.scroll.threshold, reversed: reverse.state == .on))
+                                        threshold: session.configuration.scroll.threshold, reversed: reverse.state == .on,
+                                        axes: ScrollAxes.allCases[axes.indexOfSelectedItem]))
     }
+    @objc private func optionNativeChanged(_ sender: Any?) { session.setOptionNativeInput(optionNative.state == .on) }
     @objc private func clearShortcut(_ sender: Any?) { session.recording.cancel(); session.setShortcut(nil) }
     @objc private func addApplication(_ sender: Any?) {
         guard applicationPanel == nil, session.lifecycle.mode != .quitting else { return }
@@ -888,12 +931,22 @@ struct Gesture {
             // Pending motion is emitted once in full; later deltas use consecutive points.
             let anchor = wasPanning ? contact.last : contact.origin
             let scale = contact.settings.sensitivity * (contact.settings.reversed ? -1 : 1)
-            contact.remainder.dx += (point.x - anchor.x) * scale
-            contact.remainder.dy += (point.y - anchor.y) * scale
+            let dx = point.x - anchor.x
+            let dy = point.y - anchor.y
+            let scaledX = dx * scale
+            let scaledY = dy * scale
+            guard dx.isFinite, dy.isFinite, scaledX.isFinite, scaledY.isFinite else {
+                cancel()
+                return .consume
+            }
+            contact.remainder.dx += scaledX
+            contact.remainder.dy += scaledY
             guard contact.remainder.dx.isFinite, contact.remainder.dy.isFinite else {
                 cancel()
                 return .consume
             }
+            if contact.settings.axes == .vertical { contact.remainder.dx = 0 }
+            if contact.settings.axes == .horizontal { contact.remainder.dy = 0 }
             func pixels(_ value: Double) -> Int32 {
                 Int32(min(Double(Int32.max), max(Double(Int32.min), value.rounded(.towardZero))))
             }
@@ -1132,6 +1185,7 @@ final class LiveSession {
     }
 
     private func passesNewContact(_ event: CGEvent) -> Bool {
+        if configuration.optionNativeInput && event.flags.contains(.maskAlternate) { return true }
         let windows = settingsControl?.ownedWindowNumbers ?? []
         let exclusions = configuration.excludedApps
         guard !windows.isEmpty || !exclusions.isEmpty else { return false }
@@ -1171,7 +1225,8 @@ final class LiveSession {
     func setScroll(_ scroll: ScrollSettings) {
         guard lifecycle.mode != .quitting, scroll.sensitivity.isFinite,
               (0.05...2).contains(scroll.sensitivity) else { return }
-        configuration = Configuration(scroll: scroll, shortcut: configuration.shortcut, excludedApps: configuration.excludedApps)
+        configuration = Configuration(scroll: scroll, shortcut: configuration.shortcut, excludedApps: configuration.excludedApps,
+                                      optionNativeInput: configuration.optionNativeInput)
         lifecycle.adapter.gesture.settings = scroll
         store?.save(configuration)
         settingsControl?.refresh()
@@ -1184,7 +1239,8 @@ final class LiveSession {
         do {
             try hotKeys.installHandler()
             try hotKeys.replace(with: shortcut)
-            configuration = Configuration(scroll: configuration.scroll, shortcut: shortcut, excludedApps: configuration.excludedApps)
+            configuration = Configuration(scroll: configuration.scroll, shortcut: shortcut, excludedApps: configuration.excludedApps,
+                                          optionNativeInput: configuration.optionNativeInput)
             store?.save(configuration)
             if hotKeys.cleanupPending { reportSettingsError("A failed shortcut reservation still needs cleanup. Quit to release it.") }
         } catch { reportSettingsError(String(describing: error)) }
@@ -1194,7 +1250,17 @@ final class LiveSession {
 
     func setExcludedApps(_ applications: Set<ApplicationID>) {
         guard lifecycle.mode != .quitting, applications != configuration.excludedApps else { return }
-        configuration = Configuration(scroll: configuration.scroll, shortcut: configuration.shortcut, excludedApps: applications)
+        configuration = Configuration(scroll: configuration.scroll, shortcut: configuration.shortcut, excludedApps: applications,
+                                      optionNativeInput: configuration.optionNativeInput)
+        store?.save(configuration)
+        settingsControl?.refresh()
+        notifyChanged()
+    }
+
+    func setOptionNativeInput(_ enabled: Bool) {
+        guard lifecycle.mode != .quitting, enabled != configuration.optionNativeInput else { return }
+        configuration = Configuration(scroll: configuration.scroll, shortcut: configuration.shortcut,
+                                      excludedApps: configuration.excludedApps, optionNativeInput: enabled)
         store?.save(configuration)
         settingsControl?.refresh()
         notifyChanged()
@@ -1379,7 +1445,7 @@ struct PenPan {
     static func main() {
         guard CommandLine.arguments.count == 2,
               ["--run", "--menu"].contains(CommandLine.arguments[1]) else {
-            print("Usage: pen-pan --menu | --run\nNo input tap is installed without --menu or --run.\n--menu starts OFF with a native ON/OFF menu and Quit.\n--run starts ON; stop with Ctrl-C or SIGTERM, then lift the pen.\nSettings... has live ON/OFF, scrolling, an optional toggle shortcut and excluded apps.\nFresh sensitivity is 0.30x; threshold is 6px. No default shortcut or excluded apps.\nRecord Control/Option/Command + key, or explicitly choose F13-F20 alone.\nSaved UI sensitivity outranks PENPAN_SENS; PENPAN_DEADZONE seeds the threshold.")
+            print("Usage: pen-pan --menu | --run\nNo input tap is installed without --menu or --run.\n--menu starts OFF with a native ON/OFF menu and Quit.\n--run starts ON; stop with Ctrl-C or SIGTERM, then lift the pen.\nSettings... has live ON/OFF, scrolling, an optional toggle shortcut and excluded apps.\nFresh sensitivity is 0.30x; threshold is 6px; axes are Both. Option-native input defaults OFF.\nHold Option before contact when enabled; normal app Option actions remain. Changes affect new contacts.\nNo default shortcut or excluded apps.\nRecord Control/Option/Command + key, or explicitly choose F13-F20 alone.\nSaved UI sensitivity outranks PENPAN_SENS; PENPAN_DEADZONE seeds the threshold.")
             return
         }
         do {
