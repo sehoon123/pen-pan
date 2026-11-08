@@ -1,0 +1,13 @@
+/.audit/
+/.build/
+/pen-pan
+/pen-pan-tests
+/pen-pan.candidate
+*.log
+.DS_Store
+._*
+*.swp
+*.swo
+*~
+/.idea/
+/.vscode/
