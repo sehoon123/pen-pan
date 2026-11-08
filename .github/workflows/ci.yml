@@ -16,3 +16,9 @@ jobs:
         with:
           persist-credentials: false
       - run: make check
+      - name: Isolated native axis diagnostic
+        if: always()
+        run: |
+          if [ -x .build/pen-pan-tests ]; then
+            .build/pen-pan-tests --native-axis-probe
+          fi

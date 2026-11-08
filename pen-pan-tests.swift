@@ -1168,10 +1168,15 @@ struct PenPanTests {
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     }
 
-    private static func native() {
+    private static func nativeApplication() -> NSApplication {
         let app = NSApplication.shared
         app.setActivationPolicy(.prohibited)
         app.finishLaunching()
+        return app
+    }
+
+    private static func native() {
+        let app = nativeApplication()
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 300),
                               styleMask: [.titled], backing: .buffered, defer: false)
         let control = DownControl(frame: NSRect(x: 0, y: 0, width: 300, height: 300))
@@ -2379,6 +2384,10 @@ struct PenPanTests {
             control.mouseUp(with: NSEvent(cgEvent: up)!)
             try require(control.ups == 1 && hits == 0 && owners == 0 && trace.output.count == 2, "bypass queried target or generated events")
         }
+        nativeAxisTest()
+    }
+
+    private static func nativeAxisTest() {
         test("native NSScrollView observes explicit axes in both directions with reversal and no blocked motion") {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 300),
                                   styleMask: [.titled], backing: .buffered, defer: false)
@@ -2431,12 +2440,34 @@ struct PenPanTests {
                             let origin = scroll.contentView.bounds.origin
                             return abs(origin.x - expected.x) < 0.01 && abs(origin.y - expected.y) < 0.01
                         }
+                        func logContext(_ stage: String, elapsed: Double, pumpCount: Int) {
+                            let app = NSApplication.shared
+                            let views: [(String, NSView)] = [("scroll", scroll), ("clip", scroll.contentView), ("document", scroll.documentView!)]
+                            let viewState = views.map { name, view in
+                                "\(name)={frame=\(view.frame) bounds=\(view.bounds) visibleRect=\(view.visibleRect) hidden=\(view.isHiddenOrHasHiddenAncestor) needsDisplay=\(view.needsDisplay) needsLayout=\(view.needsLayout) wantsLayer=\(view.wantsLayer) layer=\(view.layer != nil) layerNeedsDisplay=\(view.layer?.needsDisplay() ?? false) layerNeedsLayout=\(view.layer?.needsLayout() ?? false)}"
+                            }.joined(separator: " ")
+                            let fields = [
+                                "NATIVE axis-context stage=\(stage) axes=\(axes.rawValue) reversed=\(reversed) sign=\(sign) uptime=\(ProcessInfo.processInfo.systemUptime) observerElapsed=\(elapsed) pumpCount=\(pumpCount) expected=\(expected) matches=\(atExpectedOrigin())",
+                                "window={number=\(window.windowNumber) frame=\(window.frame) visible=\(window.isVisible) occlusion=\(window.occlusionState.rawValue) unoccluded=\(window.occlusionState.contains(.visible))} \(viewState) documentRect=\(scroll.contentView.documentRect)",
+                                "app={running=\(app.isRunning) active=\(app.isActive) activationPolicy=\(app.activationPolicy().rawValue) currentEventType=\(app.currentEvent.map { String($0.type.rawValue) } ?? "nil") currentEventWindow=\(app.currentEvent.map { String($0.windowNumber) } ?? "nil")} runLoop={current=\(RunLoop.current.currentMode?.rawValue ?? "nil") cfCurrent=\(CFRunLoopCopyCurrentMode(CFRunLoopGetCurrent()).map { String(describing: $0) } ?? "nil") default=\(RunLoop.Mode.default.rawValue)}",
+                                "CG={type=\(event.type.rawValue) timestamp=\(event.timestamp) targetPID=\(event.getIntegerValueField(.eventTargetUnixProcessID)) targetPSN=\(event.getIntegerValueField(.eventTargetProcessSerialNumber)) windowUnderPointer=\(event.getIntegerValueField(.mouseEventWindowUnderMousePointer)) windowCanHandle=\(event.getIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent)) continuous=\(event.getIntegerValueField(.scrollWheelEventIsContinuous)) pointDelta=(\(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2)),\(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1)))}",
+                                "NS={type=\(native.type.rawValue) timestamp=\(native.timestamp) window=\(native.window.map { String($0.windowNumber) } ?? "nil") windowNumber=\(native.windowNumber) location=\(native.locationInWindow) phase=\(native.phase.rawValue) momentum=\(native.momentumPhase.rawValue) legacyDelta=(\(native.deltaX),\(native.deltaY)) precise=\(native.hasPreciseScrollingDeltas) scrollingDelta=(\(native.scrollingDeltaX),\(native.scrollingDeltaY))}"
+                            ]
+                            // Write each snapshot immediately so the first failing context survives buffered test output.
+                            FileHandle.standardOutput.write(Data((fields.joined(separator: " ") + "\n").utf8))
+                        }
+                        logContext("before-delivery", elapsed: 0, pumpCount: 0)
                         scroll.scrollWheel(with: native)
                         // AppKit applies precise scrolling asynchronously; observe the single wheel, never resend it.
-                        let deadline = ProcessInfo.processInfo.systemUptime + 1
+                        let observationStart = ProcessInfo.processInfo.systemUptime
+                        let deadline = observationStart + 1
+                        var pumpCount = 0
+                        logContext("after-delivery", elapsed: ProcessInfo.processInfo.systemUptime - observationStart, pumpCount: pumpCount)
                         while !atExpectedOrigin() && ProcessInfo.processInfo.systemUptime < deadline {
                             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
+                            pumpCount += 1
                         }
+                        logContext("after-observation", elapsed: ProcessInfo.processInfo.systemUptime - observationStart, pumpCount: pumpCount)
                         let origin = scroll.contentView.bounds.origin
                         print("NATIVE axes=\(axes.rawValue) reversed=\(reversed) sign=\(sign) origin=\(origin)")
                         try require(abs(origin.x - expected.x) < 0.01 && abs(origin.y - expected.y) < 0.01,
@@ -2451,8 +2482,9 @@ struct PenPanTests {
         switch CommandLine.arguments.dropFirst().first {
         case "--offline": offline(); lifecycleOffline(); settingsOffline(); exclusionsOffline(); inputControlsOffline()
         case "--native": native(); settingsNative(); exclusionsNative(); inputControlsNative()
+        case "--native-axis-probe": _ = nativeApplication(); nativeAxisTest()
         default:
-            print("Usage: pen-pan-tests --offline | --native\nNeither mode creates an event tap or posts global input. Native uses a temporary nonactivating app-local fixture.")
+            print("Usage: pen-pan-tests --offline | --native | --native-axis-probe\nNo mode creates an event tap or posts global input. Native modes use temporary nonactivating app-local fixtures; --native-axis-probe runs only the existing axis test, not the full suite.")
             return
         }
         print("\(tests - failures)/\(tests) checks passed. No event taps, global posting, or helper processes.")
