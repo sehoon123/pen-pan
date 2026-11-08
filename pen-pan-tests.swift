@@ -585,7 +585,7 @@ struct PenPanTests {
                 let config = try store.load(environment: [:])
                 try require(config == Configuration(), "fresh configuration differs")
                 try require(config.scroll.sensitivity == 0.30 && config.scroll.threshold == 6 &&
-                            !config.scroll.reversed && config.shortcut == nil, "wrong fresh defaults")
+                            !config.scroll.reversed && config.shortcut == nil && config.excludedApps.isEmpty, "wrong fresh defaults")
                 try require(defaults.object(forKey: "sensitivity") == nil, "loading wrote settings")
             }
         }
@@ -886,6 +886,266 @@ struct PenPanTests {
         }
     }
 
+    private static func withApplicationFixture(identifier: Any = "org.penpan.Fixture", packageType: String = "APPL",
+                                               executable: Bool = true, extension suffix: String = "app",
+                                               _ body: (URL) throws -> Void) throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("penpan-app-\(UUID().uuidString)")
+        let url = root.appendingPathComponent("Fixture.\(suffix)")
+        let contents = url.appendingPathComponent("Contents")
+        try FileManager.default.createDirectory(at: contents.appendingPathComponent("MacOS"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let info: [String: Any] = ["CFBundleIdentifier": identifier, "CFBundlePackageType": packageType,
+                                   "CFBundleExecutable": "fixture", "CFBundleName": "Fixture application"]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: contents.appendingPathComponent("Info.plist"))
+        if executable {
+            let path = contents.appendingPathComponent("MacOS/fixture")
+            try Data("#!/bin/sh\nexit 0\n".utf8).write(to: path)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
+        }
+        try body(url)
+    }
+
+    private static func exclusionsOffline() {
+        test("ApplicationID accepts explicit bundle identities, not wildcards, whitespace or empty components") {
+            for value in ["org.example.App", "com.vendor-1.Product2", "a.b"] {
+                try require(ApplicationID(value)?.rawValue == value, "valid ID rejected: \(value)")
+            }
+            for value in ["", "*", "com.*", "com..app", ".app", "com.app.", "app", " com.app", "com.app\n",
+                          "com.app ", "com.app/child", "com.app_name", "com.é", "com.-app"] {
+                try require(ApplicationID(value) == nil, "unsafe ID accepted: \(value)")
+            }
+        }
+        test("exclusion persistence validates the entire array type, filters IDs, deduplicates and sorts") {
+            try withStore { store, defaults in
+                let first = ApplicationID("org.example.First")!
+                let second = ApplicationID("org.example.Second")!
+                let shortcut = try Shortcut(keyCode: UInt32(kVK_F13), modifiers: 0)
+                let config = Configuration(scroll: ScrollSettings(sensitivity: 0.15, reversed: true), shortcut: shortcut,
+                                           excludedApps: [second, first])
+                store.save(config)
+                try require(defaults.object(forKey: "excludedApps") as? [String] == [first.rawValue, second.rawValue], "storage not deterministic")
+                try require(try store.load(environment: [:]) == config, "exclusions did not round trip with siblings")
+                for value: Any in ["org.example.First", ["org.example.First", 7], ["bad": "org.example.First"], true] {
+                    defaults.set(value, forKey: "excludedApps")
+                    let loaded = try store.load(environment: [:])
+                    try require(loaded.excludedApps.isEmpty && loaded.scroll == config.scroll && loaded.shortcut == shortcut,
+                                "wrong type accepted or sibling lost")
+                }
+                defaults.set([first.rawValue, "", "*", "com..app", first.rawValue, second.rawValue], forKey: "excludedApps")
+                try require(try store.load(environment: [:]).excludedApps == [first, second], "invalid ID or duplicate loaded")
+                defaults.set("broken", forKey: "shortcut")
+                defaults.set("broken", forKey: "sensitivity")
+                let loaded = try store.load(environment: [:])
+                try require(loaded.excludedApps == [first, second] && loaded.scroll.sensitivity == 0.30 && loaded.shortcut == nil,
+                            "invalid sibling erased valid exclusions")
+                try require(defaults.object(forKey: "mode") == nil, "mode was persisted")
+            }
+        }
+        test("every session setter preserves siblings and exclusion edits are non-destructive after Quit") {
+            try withStore { store, _ in
+                let fake = FakeHotKeys()
+                let session = LiveSession(store: store, hotKeyAPI: fake.api)
+                defer { session.teardown() }
+                let app = ApplicationID("org.example.App")!
+                let key = try Shortcut(keyCode: UInt32(kVK_F20), modifiers: UInt32(shiftKey))
+                session.setScroll(ScrollSettings(sensitivity: 0.15, reversed: true))
+                session.setShortcut(key)
+                session.setExcludedApps([app])
+                let expected = Configuration(scroll: ScrollSettings(sensitivity: 0.15, reversed: true), shortcut: key, excludedApps: [app])
+                try require(session.configuration == expected && (try store.load(environment: [:])) == expected, "add lost siblings")
+                session.setScroll(ScrollSettings(sensitivity: 2))
+                session.setShortcut(nil)
+                try require(session.configuration.excludedApps == [app] && session.configuration.scroll.sensitivity == 2,
+                            "sibling edits erased exclusions")
+                session.setExcludedApps([])
+                try require(session.configuration.scroll.sensitivity == 2 && session.configuration.shortcut == nil &&
+                            (try store.load(environment: [:])) == session.configuration, "remove reset siblings")
+                session.requestQuit()
+                session.setExcludedApps([app])
+                try require(session.configuration.excludedApps.isEmpty && (try store.load(environment: [:])).excludedApps.isEmpty,
+                            "Quit accepted late config")
+            }
+        }
+        test("pointer resolver validates exact window metadata and owner PID before bundle lookup") {
+            var metadata: [[String: Any]]? = [[kCGWindowNumber as String: 42, kCGWindowOwnerPID as String: 700]]
+            var windows: [CGWindowID] = []
+            var pids: [pid_t] = []
+            var identifier: String? = "org.example.Target"
+            let resolver = PointerTargetResolver(windowInfo: { windows.append($0); return metadata },
+                                                 bundleIdentifier: { pids.append($0); return identifier })
+            let app = resolver.application(forWindow: 42)
+            try require(app?.pid == 700 && app?.id == ApplicationID("org.example.Target") && windows == [42] && pids == [700],
+                        "exact pointer-window owner not used")
+            for invalid: Any in [true, 0, -1, 1.5, Double.infinity, Double.nan, Double(pid_t.max) + 1, "700"] {
+                metadata = [[kCGWindowNumber as String: 42, kCGWindowOwnerPID as String: invalid]]
+                let count = pids.count
+                try require(resolver.application(forWindow: 42) == nil && pids.count == count, "invalid owner looked up: \(invalid)")
+            }
+            for invalid: Any in [true, 0, -1, 42.5, 43, "42", Double(CGWindowID.max) + 1] {
+                metadata = [[kCGWindowNumber as String: invalid, kCGWindowOwnerPID as String: 700]]
+                let count = pids.count
+                try require(resolver.application(forWindow: 42) == nil && pids.count == count, "wrong/malformed window accepted")
+            }
+            for missing in [nil, [], [[:]]] as [[[String: Any]]?] {
+                metadata = missing
+                try require(resolver.application(forWindow: 42) == nil, "missing metadata accepted")
+            }
+            metadata = [[kCGWindowNumber as String: 42, kCGWindowOwnerPID as String: 700]]
+            for invalid in [nil, "", "*", "com..app"] as [String?] {
+                identifier = invalid
+                try require(resolver.application(forWindow: 42) == nil, "invalid/disappeared app accepted")
+            }
+            let count = windows.count
+            for invalid in [0, -1, Int(CGWindowID.max) + 1] {
+                try require(resolver.application(forWindow: invalid) == nil, "invalid window number accepted")
+            }
+            try require(windows.count == count, "invalid window reached OS boundary")
+        }
+        test("exclusions use the inactive pointer window owner, pass unknowns only when active, and skip empty-set lookups") {
+            let app = ApplicationID("org.example.PointerTarget")!
+            let session = LiveSession(configuration: Configuration(excludedApps: [app]))
+            session.lifecycle.observationStarted(leftButtonHeld: false)
+            session.lifecycle.setEnabled(true)
+            var target = 42
+            var hits = 0
+            var lookups = 0
+            var point: CGPoint?
+            var id: String? = app.rawValue
+            session.windowAtPoint = { hits += 1; point = $0; return target }
+            session.targetResolver = PointerTargetResolver(windowInfo: {
+                lookups += 1
+                return [[kCGWindowNumber as String: $0, kCGWindowOwnerPID as String: 700]]
+            }, bundleIdentifier: { _ in id })
+            var output: [CGEvent] = []
+            func send(_ event: CGEvent) -> CGEvent? { session.lifecycle.handle(event.type, event, post: { output.append($0) }) }
+            let down = mouse(.leftMouseDown, 123, 234)
+            try require(send(down) === down && point == down.unflippedLocation && hits == 1 && lookups == 1,
+                        "pointer owner was replaced by focus or coordinates changed")
+            target = 99
+            id = "org.example.NotExcluded"
+            session.setExcludedApps([])
+            session.lifecycle.setEnabled(false)
+            session.lifecycle.setEnabled(true)
+            for event in [mouse(.leftMouseDragged, 800), mouse(.leftMouseUp, 800)] {
+                try require(send(event) === event, "mid-contact edits stole original excluded object")
+            }
+            try require(hits == 1 && lookups == 1 && output.isEmpty, "passed contact re-resolved or emitted")
+            session.setExcludedApps([app])
+            try require(send(mouse(.leftMouseDown)) == nil, "different pointer app was excluded by focus")
+            _ = send(mouse(.leftMouseUp, 120))
+            try require(output.count == 1 && output[0].type == .scrollWheel, "nonexcluded inactive window did not pan")
+            id = nil
+            let unknown = mouse(.leftMouseDown)
+            try require(send(unknown) === unknown, "unresolved active exclusion intercepted")
+            let up = mouse(.leftMouseUp)
+            try require(send(up) === up, "unresolved release changed")
+            session.setExcludedApps([])
+            let before = (hits, lookups)
+            try require(send(mouse(.leftMouseDown)) == nil, "empty-set unknown changed baseline")
+            _ = send(mouse(.leftMouseUp, 120))
+            try require(hits == before.0 && lookups == before.1, "empty exclusions resolved window/app without helper UI")
+        }
+        test("exclusion edits preserve pending, panning and draining contact ownership") {
+            for panning in [false, true] {
+                let app = ApplicationID("org.example.App")!
+                let session = LiveSession()
+                session.lifecycle.observationStarted(leftButtonHeld: false)
+                session.lifecycle.setEnabled(true)
+                session.windowAtPoint = { _ in 42 }
+                session.targetResolver = PointerTargetResolver(windowInfo: {
+                    [[kCGWindowNumber as String: $0, kCGWindowOwnerPID as String: 700]]
+                }, bundleIdentifier: { _ in app.rawValue })
+                var output: [CGEvent] = []
+                func send(_ event: CGEvent) -> CGEvent? { session.lifecycle.handle(event.type, event, post: { output.append($0) }) }
+                _ = send(mouse(.leftMouseDown))
+                if panning { _ = send(mouse(.leftMouseDragged, 110)) }
+                session.setExcludedApps([app])
+                _ = send(mouse(.leftMouseUp, 120))
+                try require(!output.isEmpty && output.allSatisfy { $0.type == .scrollWheel }, "edit stole owned contact")
+                let excluded = mouse(.leftMouseDown)
+                try require(send(excluded) === excluded, "new exclusion did not apply")
+                _ = send(mouse(.leftMouseUp))
+                session.setExcludedApps([])
+                _ = send(mouse(.leftMouseDown))
+                session.lifecycle.setEnabled(false)
+                session.setExcludedApps([app])
+                session.lifecycle.setEnabled(true)
+                let before = output.count
+                try require(send(mouse(.leftMouseDragged, 140)) == nil && send(mouse(.leftMouseUp, 140)) == nil &&
+                            output.count == before && session.lifecycle.contact == .idle, "exclusion edit revived draining contact")
+            }
+        }
+        test("application package boundary validates local app identity, package type and executable") {
+            try withApplicationFixture { url in
+                let selected = try SelectedApplication(url: url)
+                try require(selected.id == ApplicationID("org.penpan.Fixture") && selected.name == "Fixture application", "valid package not decoded")
+            }
+            func rejected(_ url: URL) throws {
+                do { _ = try SelectedApplication(url: url); throw Failure("accepted malformed package") }
+                catch let error as Failure { try require(error.description.contains("Choose a local .app"), error.description) }
+            }
+            try withApplicationFixture(identifier: "*") { try rejected($0) }
+            try withApplicationFixture(identifier: 7) { try rejected($0) }
+            try withApplicationFixture(packageType: "BNDL") { try rejected($0) }
+            try withApplicationFixture(executable: false) { try rejected($0) }
+            try withApplicationFixture(extension: "folder") { try rejected($0) }
+            try withApplicationFixture { url in
+                let executable = url.appendingPathComponent("Contents/MacOS/fixture")
+                try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: executable.path)
+                try rejected(url)
+            }
+            try rejected(URL(string: "https://example.invalid/Fixture.app")!)
+            try rejected(FileManager.default.temporaryDirectory.appendingPathComponent("missing-\(UUID().uuidString).app"))
+        }
+        test("all eight explicit F13-F20 keys validate, label, conflict, repeat-latch and Clear through the session") {
+            let codes = [kVK_F13, kVK_F14, kVK_F15, kVK_F16, kVK_F17, kVK_F18, kVK_F19, kVK_F20]
+            for (offset, code) in codes.enumerated() {
+                let bare = try Shortcut(keyCode: UInt32(code), modifiers: 0)
+                try require(bare.label == "F\(13 + offset)", "SDK key map label differs")
+                for modifiers in [UInt32(shiftKey), UInt32(controlKey | optionKey | cmdKey | shiftKey)] {
+                    _ = try Shortcut(keyCode: UInt32(code), modifiers: modifiers)
+                }
+                let fake = FakeHotKeys()
+                let session = LiveSession(hotKeyAPI: fake.api)
+                defer { session.teardown() }
+                session.lifecycle.observationStarted(leftButtonHeld: false)
+                let old = try Shortcut(keyCode: 35, modifiers: UInt32(controlKey))
+                session.setShortcut(old)
+                fake.conflict.insert(bare.keyCode)
+                session.recording.begin()
+                session.recording.press(bare)
+                session.recording.release(keyCode: bare.keyCode)
+                try require(session.configuration.shortcut == old && session.settingsError != nil, "Fn conflict replaced old binding")
+                fake.conflict = []
+                session.recording.begin()
+                session.recording.press(bare)
+                session.recording.cancel()
+                session.recording.release(keyCode: bare.keyCode)
+                try require(session.configuration.shortcut == old, "cancelled Fn recording committed")
+                session.recording.begin()
+                session.recording.press(bare)
+                session.recording.release(keyCode: bare.keyCode)
+                let id = fake.registered.last!.1
+                session.hotKeys.receive(id: id, pressed: true)
+                session.hotKeys.receive(id: id, pressed: true)
+                try require(session.configuration.shortcut == bare && session.lifecycle.mode == .on, "Fn registration/repeat toggled incorrectly")
+                session.hotKeys.receive(id: id, pressed: false)
+                session.hotKeys.receive(id: id, pressed: true)
+                try require(session.lifecycle.mode == .off, "Fn release did not rearm")
+                session.setShortcut(nil)
+                try require(fake.active.isEmpty && session.configuration.shortcut == nil, "Fn Clear retained binding")
+            }
+            for code in [kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6, kVK_F7, kVK_F8, kVK_F9, kVK_F10, kVK_F11, kVK_F12,
+                         kVK_ANSI_A, kVK_ANSI_1, kVK_Space, kVK_Shift, kVK_Function, kVK_VolumeUp, kVK_VolumeDown, kVK_Mute] {
+                for modifiers in [UInt32(0), UInt32(shiftKey)] {
+                    do { _ = try Shortcut(keyCode: UInt32(code), modifiers: modifiers); throw Failure("accepted unsafe standalone key") }
+                    catch let error as Failure { try require(error.description.contains("Use Control"), error.description) }
+                }
+            }
+        }
+    }
+
     private final class DownControl: NSView {
         var downs = 0
         var ups = 0
@@ -1097,7 +1357,7 @@ struct PenPanTests {
         var recorderKey = true
         override var isKeyWindow: Bool { recorderKey }
         convenience init() {
-            self.init(contentRect: NSRect(x: 0, y: 0, width: 460, height: 300),
+            self.init(contentRect: NSRect(x: 0, y: 0, width: 620, height: 600),
                       styleMask: [.titled, .closable], backing: .buffered, defer: false)
         }
     }
@@ -1153,7 +1413,7 @@ struct PenPanTests {
             session.lifecycle.setEnabled(true)
             var point: CGPoint?
             var target = settings.window.windowNumber
-            settings.windowAtPoint = { point = $0; return target }
+            session.windowAtPoint = { point = $0; return target }
             let down = mouse(.leftMouseDown, 123, 234)
             try require(session.lifecycle.handle(down.type, down, post: { _ in }) === down &&
                         point == down.unflippedLocation, "native targeting coordinate boundary differs")
@@ -1341,10 +1601,368 @@ struct PenPanTests {
         }
     }
 
+    private final class ApplicationRowsProbe: NSObject, NSTableViewDataSource {
+        unowned let settings: SettingsControl
+        var reads = 0
+        init(_ settings: SettingsControl) { self.settings = settings }
+        func numberOfRows(in tableView: NSTableView) -> Int { reads += 1; return settings.applicationRows.count }
+    }
+
+    private static func exclusionsNative() {
+        let app = NSApplication.shared
+        test("native grouped Settings live toggle follows retry, hotkey, input, drain and Quit without app-list reloads") {
+            let fake = FakeHotKeys()
+            let session = LiveSession(hotKeyAPI: fake.api)
+            defer { session.teardown() }
+            var attempts = 0
+            session.createTap = { _, _ in attempts += 1; return nil }
+            session.prepareSettings(window: RecorderWindow())
+            let settings = session.settingsControl!
+            settings.window.orderBack(nil)
+            let menu = MenuControl(session: session)
+            session.changed = { menu.refresh() }
+            try require(settings.status.stringValue == "OFF, not observing" && settings.toggle.title == "Retry ON", "initial Settings status wrong")
+            settings.toggle.performClick(nil)
+            try require(attempts == 1 && settings.status.stringValue.contains("OFF: could not create event tap") &&
+                        settings.toggle.title == "Retry ON" && menu.toggle.state == .off, "Settings retry diverged from menu")
+            session.lifecycle.observationStarted(leftButtonHeld: false)
+            session.notifyChanged()
+            try require(settings.toggle.title == "Turn ON", "available OFF action wrong")
+            let key = try Shortcut(keyCode: UInt32(kVK_F13), modifiers: 0)
+            session.setShortcut(key)
+            let identifier = ApplicationID("org.example.Target")!
+            session.setExcludedApps([identifier])
+            session.windowAtPoint = { _ in 42 }
+            session.targetResolver = PointerTargetResolver(windowInfo: {
+                [[kCGWindowNumber as String: $0, kCGWindowOwnerPID as String: 700]]
+            }, bundleIdentifier: { _ in identifier.rawValue })
+            let probe = ApplicationRowsProbe(settings)
+            settings.applications.dataSource = probe
+            settings.applications.reloadData()
+            settings.window.contentView!.layoutSubtreeIfNeeded()
+            let reads = probe.reads
+            settings.toggle.performClick(nil)
+            try require(settings.status.stringValue == "ON" && settings.toggle.title == "Turn OFF" && menu.toggle.state == .on,
+                        "Settings toggle did not use session lifecycle")
+            var output: [CGEvent] = []
+            func send(_ event: CGEvent) -> CGEvent? {
+                let result = session.lifecycle.handle(event.type, event, post: { output.append($0) })
+                session.notifyChanged()
+                return result
+            }
+            let down = mouse(.leftMouseDown)
+            try require(send(down) === down && settings.status.stringValue == "ON, waiting for release", "input status not live")
+            for _ in 0..<100 { let drag = mouse(.leftMouseDragged, 130); try require(send(drag) === drag, "passed drag changed") }
+            _ = send(mouse(.leftMouseUp))
+            try require(settings.status.stringValue == "ON" && probe.reads == reads && output.isEmpty,
+                        "drag notifications reloaded app rows or status did not clear")
+            let id = fake.registered.last!.1
+            session.hotKeys.receive(id: id, pressed: true)
+            try require(settings.status.stringValue == "OFF" && settings.toggle.title == "Turn ON" && menu.toggle.state == .off,
+                        "hotkey status not reflected in Settings")
+            session.hotKeys.receive(id: id, pressed: false)
+            session.setExcludedApps([])
+            try require(probe.reads > reads, "configuration change did not reload app rows")
+            settings.toggle.performClick(nil)
+            _ = send(mouse(.leftMouseDown))
+            settings.toggle.performClick(nil)
+            try require(settings.status.stringValue == "OFF, draining", "Settings omitted drain")
+            settings.toggle.performClick(nil)
+            try require(settings.status.stringValue == "ON, waiting for release", "Settings revived drain")
+            session.requestQuit()
+            try require(settings.status.stringValue == "Quitting, waiting for release" && !settings.toggle.isEnabled, "Settings omitted terminal wait")
+            _ = send(mouse(.leftMouseUp))
+            try require(settings.status.stringValue == "Quitting" && session.lifecycle.finished && output.isEmpty, "Quit status did not finish")
+        }
+        test("native picker Add, duplicate, invalid, cancel and Remove preserve sibling settings and selection") {
+            try withStore { store, _ in
+                try withApplicationFixture { url in
+                    let fake = FakeHotKeys()
+                    let key = try Shortcut(keyCode: UInt32(kVK_F20), modifiers: UInt32(shiftKey))
+                    let session = LiveSession(configuration: Configuration(scroll: ScrollSettings(sensitivity: 0.15, reversed: true)),
+                                              store: store, hotKeyAPI: fake.api)
+                    defer { session.teardown() }
+                    session.setShortcut(key)
+                    session.prepareSettings(window: RecorderWindow())
+                    let settings = session.settingsControl!
+                    settings.window.orderBack(nil)
+                    var completions: [(NSApplication.ModalResponse) -> Void] = []
+                    settings.presentApplicationPanel = { _, _, completion in completions.append(completion) }
+                    var selection = url
+                    settings.selectedApplicationURL = { _ in selection }
+                    try require(!settings.removeSelected.isEnabled && settings.applicationMessage.stringValue.contains("No excluded apps"), "empty state wrong")
+                    settings.recorder.performClick(nil)
+                    settings.add.performClick(nil)
+                    let panel = settings.applicationPanel!
+                    try require(!session.recording.active && !settings.add.isEnabled && !panel.canChooseDirectories &&
+                                !panel.allowsMultipleSelection && panel.allowedContentTypes == [.applicationBundle], "picker not app-only or recorder stayed active")
+                    _ = app.sendAction(settings.add.action!, to: settings.add.target, from: settings.add)
+                    try require(completions.count == 1 && settings.applicationPanel === panel, "picker presented twice")
+                    completions[0](.OK)
+                    let identifier = ApplicationID("org.penpan.Fixture")!
+                    try require(session.configuration.excludedApps == [identifier] && settings.applicationRows == [identifier] &&
+                                settings.applications.selectedRow == 0 && settings.removeSelected.isEnabled && settings.add.isEnabled,
+                                "Add did not select saved row")
+                    try require(session.configuration.scroll == ScrollSettings(sensitivity: 0.15, reversed: true) &&
+                                session.configuration.shortcut == key && (try store.load(environment: [:])) == session.configuration,
+                                "Add lost siblings or did not save")
+                    settings.add.performClick(nil)
+                    completions.last!(.OK)
+                    try require(session.configuration.excludedApps == [identifier] && settings.applicationRows.count == 1 &&
+                                settings.applications.selectedRow == 0 && settings.applicationMessage.stringValue.contains("already excluded"), "duplicate mutated config")
+                    let cell = settings.applications.view(atColumn: 0, row: 0, makeIfNecessary: true) as! NSTableCellView
+                    try require(cell.textField?.stringValue == "Fixture application" && cell.toolTip?.contains(identifier.rawValue) == true,
+                                "friendly name or visible bundle identity missing")
+                    let expected = session.configuration
+                    selection = url.deletingLastPathComponent().appendingPathComponent("missing.app")
+                    settings.add.performClick(nil)
+                    completions.last!(.OK)
+                    try require(session.configuration == expected && settings.applicationMessage.stringValue.contains("Choose a local .app"), "invalid package mutated config or error hidden")
+                    settings.add.performClick(nil)
+                    completions.last!(.cancel)
+                    try require(session.configuration == expected && settings.applicationMessage.stringValue.contains("Cancelled"), "cancel mutated config or missing feedback")
+                    settings.applications.deselectAll(nil)
+                    try require(!settings.removeSelected.isEnabled, "Remove enabled without selection")
+                    _ = app.sendAction(settings.removeSelected.action!, to: settings.removeSelected.target, from: settings.removeSelected)
+                    try require(session.configuration == expected, "unselected Remove changed config")
+                    settings.applications.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+                    settings.removeSelected.performClick(nil)
+                    try require(session.configuration.excludedApps.isEmpty && session.configuration.shortcut == key &&
+                                session.configuration.scroll == expected.scroll && !settings.removeSelected.isEnabled &&
+                                settings.applicationMessage.stringValue.contains("No excluded apps"), "Remove lost sibling/empty state")
+                }
+            }
+        }
+        test("native duplicate Add refreshes a materialized fallback-name row without changing membership or siblings") {
+            try withStore { store, _ in
+                let identifier = ApplicationID("org.penpan.Duplicate-\(UUID().uuidString)")!
+                let key = try Shortcut(keyCode: UInt32(kVK_F20), modifiers: UInt32(shiftKey))
+                let expected = Configuration(scroll: ScrollSettings(sensitivity: 0.15, reversed: true),
+                                             shortcut: key, excludedApps: [identifier])
+                store.save(expected)
+                let session = LiveSession(configuration: expected, store: store, hotKeyAPI: FakeHotKeys().api)
+                defer { session.teardown() }
+                session.prepareSettings(window: RecorderWindow())
+                let settings = session.settingsControl!
+                settings.window.orderBack(nil)
+                settings.window.contentView!.layoutSubtreeIfNeeded()
+                settings.applications.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+                let fallback = settings.applications.view(atColumn: 0, row: 0, makeIfNecessary: true) as! NSTableCellView
+                try require(fallback.textField?.stringValue == identifier.rawValue &&
+                            fallback.toolTip == "\(identifier.rawValue)\n\(identifier.rawValue)" &&
+                            fallback.accessibilityLabel() == "\(identifier.rawValue), \(identifier.rawValue)",
+                            "fixture did not materialize fallback metadata")
+                try withApplicationFixture(identifier: identifier.rawValue) { url in
+                    var completion: ((NSApplication.ModalResponse) -> Void)?
+                    settings.presentApplicationPanel = { _, _, callback in completion = callback }
+                    settings.selectedApplicationURL = { _ in url }
+                    settings.add.performClick(nil)
+                    completion!(.OK)
+                    settings.window.contentView!.layoutSubtreeIfNeeded()
+                    try require(session.configuration == expected && (try store.load(environment: [:])) == expected &&
+                                settings.applicationRows == [identifier] && settings.applications.selectedRow == 0 &&
+                                settings.removeSelected.isEnabled && settings.applicationMessage.stringValue.contains("already excluded"),
+                                "duplicate Add changed membership, siblings or selection")
+                    let cell = settings.applications.view(atColumn: 0, row: 0, makeIfNecessary: true) as! NSTableCellView
+                    try require(cell.textField?.stringValue == "Fixture application", "duplicate Add left the displayed title stale")
+                    try require(cell.toolTip == "Fixture application\n\(identifier.rawValue)", "duplicate Add left the tooltip stale")
+                    try require(cell.accessibilityLabel() == "Fixture application, \(identifier.rawValue)",
+                                "duplicate Add left the accessibility label stale")
+                }
+            }
+        }
+        test("native retained picker and related windows pass pen input, not overlapping unrelated or hidden windows") {
+            let fake = FakeHotKeys()
+            let session = LiveSession(hotKeyAPI: fake.api)
+            defer { session.teardown() }
+            session.prepareSettings(window: RecorderWindow())
+            let settings = session.settingsControl!
+            settings.window.orderBack(nil)
+            settings.presentApplicationPanel = { panel, _, _ in panel.orderBack(nil) }
+            settings.add.performClick(nil)
+            let panel = settings.applicationPanel!
+            let child = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+                                 styleMask: [.titled], backing: .buffered, defer: false)
+            let unrelated = NSWindow(contentRect: settings.window.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            defer { child.orderOut(nil); unrelated.orderOut(nil) }
+            settings.window.addChildWindow(child, ordered: .above)
+            child.orderBack(nil)
+            unrelated.orderBack(nil)
+            session.lifecycle.observationStarted(leftButtonHeld: false)
+            session.lifecycle.setEnabled(true)
+            var target = panel.windowNumber
+            var hitCount = 0
+            var metadataCount = 0
+            session.windowAtPoint = { _ in hitCount += 1; return target }
+            session.targetResolver = PointerTargetResolver(windowInfo: { _ in metadataCount += 1; return nil }, bundleIdentifier: { _ in nil })
+            var output: [CGEvent] = []
+            func send(_ event: CGEvent) -> CGEvent? { session.lifecycle.handle(event.type, event, post: { output.append($0) }) }
+            for number in [settings.window.windowNumber, panel.windowNumber, child.windowNumber] {
+                target = number
+                let down = mouse(.leftMouseDown)
+                try require(send(down) === down, "owned UI intercepted: \(number)")
+                target = unrelated.windowNumber
+                for event in [mouse(.leftMouseDragged, 140), mouse(.leftMouseUp, 140)] {
+                    try require(send(event) === event, "owned UI contact stolen outside window")
+                }
+            }
+            try require(hitCount == 3 && metadataCount == 0 && output.isEmpty, "own UI resolved app or re-hit drag")
+            target = unrelated.windowNumber
+            try require(send(mouse(.leftMouseDown)) == nil, "arbitrary process/overlapping window exempted")
+            _ = send(mouse(.leftMouseUp, 120))
+            try require(output.count == 1 && output[0].type == .scrollWheel, "unrelated target did not pan")
+            session.setExcludedApps([ApplicationID("org.example.App")!])
+            target = panel.windowNumber
+            let own = mouse(.leftMouseDown)
+            try require(send(own) === own && metadataCount == 0, "own panel lookup did not short-circuit active exclusions")
+            _ = send(mouse(.leftMouseUp))
+            panel.orderOut(nil)
+            child.orderOut(nil)
+            try require(!settings.ownedWindowNumbers.contains(panel.windowNumber) && !settings.ownedWindowNumbers.contains(child.windowNumber),
+                        "hidden UI numbers retained")
+        }
+        test("native Settings close and Quit invalidate picker before cancellation and ignore stale completions") {
+            try withStore { store, _ in
+                try withApplicationFixture { url in
+                    let fake = FakeHotKeys()
+                    let session = LiveSession(store: store, hotKeyAPI: fake.api)
+                    defer { session.teardown() }
+                    session.prepareSettings(window: RecorderWindow())
+                    let settings = session.settingsControl!
+                    settings.window.orderBack(nil)
+                    var completions: [(NSApplication.ModalResponse) -> Void] = []
+                    settings.presentApplicationPanel = { panel, _, completion in panel.orderBack(nil); completions.append(completion) }
+                    settings.selectedApplicationURL = { _ in url }
+                    settings.add.performClick(nil)
+                    let first = settings.applicationPanel!
+                    settings.window.performClose(nil)
+                    try require(settings.applicationPanel == nil && !first.isVisible, "close retained visible picker")
+                    settings.window.orderBack(nil)
+                    settings.add.performClick(nil)
+                    let second = settings.applicationPanel!
+                    completions[0](.OK)
+                    try require(settings.applicationPanel === second && session.configuration.excludedApps.isEmpty,
+                                "stale picker completion saved or stole current picker")
+                    session.requestQuit()
+                    try require(settings.applicationPanel == nil && !second.isVisible && settings.ownedWindowNumbers.isEmpty, "Quit did not dismiss owned picker/UI")
+                    completions[1](.OK)
+                    try require(session.configuration.excludedApps.isEmpty && (try store.load(environment: [:])).excludedApps.isEmpty,
+                                "late completion saved after Quit")
+                    _ = app.sendAction(settings.add.action!, to: settings.add.target, from: settings.add)
+                    try require(settings.applicationPanel == nil && completions.count == 2, "Quit allowed picker reopening")
+                }
+            }
+        }
+        test("native all eight standalone F13-F20 recorder events require matching release, reject repeats and Clear safely") {
+            let fake = FakeHotKeys()
+            let session = LiveSession(hotKeyAPI: fake.api)
+            defer { session.teardown() }
+            session.prepareSettings(window: RecorderWindow())
+            let settings = session.settingsControl!
+            settings.window.orderBack(nil)
+            func event(_ type: NSEvent.EventType, _ code: Int, flags: NSEvent.ModifierFlags = [.function], repeatKey: Bool = false) -> NSEvent {
+                NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags, timestamp: 1,
+                                 windowNumber: settings.window.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "",
+                                 isARepeat: repeatKey, keyCode: UInt16(code))!
+            }
+            for (index, code) in [kVK_F13, kVK_F14, kVK_F15, kVK_F16, kVK_F17, kVK_F18, kVK_F19, kVK_F20].enumerated() {
+                fake.conflict.insert(UInt32(code))
+                settings.recorder.performClick(nil)
+                settings.recorder.keyDown(with: event(.keyDown, code))
+                settings.recorder.keyUp(with: event(.keyUp, code))
+                try require(session.configuration.shortcut == nil && fake.active.isEmpty && settings.message.stringValue.contains("conflict"),
+                            "Fn recorder conflict was not inline/non-destructive")
+                fake.conflict = []
+                settings.recorder.performClick(nil)
+                settings.recorder.keyDown(with: event(.keyDown, code, repeatKey: true))
+                try require(session.recording.state == .listening, "repeat captured Fn")
+                settings.recorder.keyDown(with: event(.keyDown, code))
+                settings.recorder.keyUp(with: event(.keyUp, kVK_ANSI_A))
+                try require(session.configuration.shortcut == nil && session.recording.active && fake.active.isEmpty, "Fn committed early")
+                settings.recorder.keyUp(with: event(.keyUp, code))
+                try require(session.configuration.shortcut?.keyCode == UInt32(code) && session.configuration.shortcut?.modifiers == 0 &&
+                            settings.recorder.title == "F\(13 + index)" && fake.active.count == 1, "Fn native recorder failed")
+                settings.clear.performClick(nil)
+                try require(session.configuration.shortcut == nil && fake.active.isEmpty && !settings.clear.isEnabled, "Fn Clear did not remove")
+                settings.recorder.performClick(nil)
+                settings.recorder.keyDown(with: event(.keyDown, code, flags: [.shift, .function]))
+                settings.recorder.keyUp(with: event(.keyUp, code, flags: [.shift, .function]))
+                try require(session.configuration.shortcut?.modifiers == UInt32(shiftKey), "Shift+Fn rejected or incidental Fn stored")
+                settings.clear.performClick(nil)
+            }
+            settings.recorder.performClick(nil)
+            for code in [kVK_ANSI_A, kVK_Space, kVK_F1, kVK_F12, kVK_VolumeUp, kVK_Function] {
+                settings.recorder.keyDown(with: event(.keyDown, code))
+                try require(session.recording.state == .listening && session.configuration.shortcut == nil &&
+                            !settings.message.stringValue.isEmpty, "incidental function flag authorized typing/media key")
+            }
+            settings.recorder.keyDown(with: event(.keyDown, kVK_Escape))
+            try require(!session.recording.active, "Fn recorder Esc failed")
+        }
+        test("native grouped Settings render controls, long messages and app identities within bounds with accessible key order") {
+            let fake = FakeHotKeys()
+            let session = LiveSession(hotKeyAPI: fake.api)
+            defer { session.teardown() }
+            session.prepareSettings(window: RecorderWindow())
+            let settings = session.settingsControl!
+            settings.window.orderBack(nil)
+            let longID = ApplicationID("org.example." + String(repeating: "VeryLongApplicationIdentifier", count: 8))!
+            session.setExcludedApps([longID])
+            settings.applications.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+            session.recording.error("Candidate cleanup failed: Cannot remove shortcut (-2147483648). Quit to release remaining reservation. A failed shortcut reservation still needs cleanup. Quit to release it.")
+            settings.applicationMessage.stringValue = "Choose a local .app package with a valid bundle ID and executable. Nothing was changed."
+            settings.window.appearance = NSAppearance(named: .aqua)
+            let content = settings.window.contentView!
+            content.wantsLayer = true
+            settings.window.effectiveAppearance.performAsCurrentDrawingAppearance {
+                content.layer!.backgroundColor = NSColor.windowBackgroundColor.cgColor
+            }
+            content.layoutSubtreeIfNeeded()
+            func withinBounds(_ view: NSView) throws {
+                let frame = view.convert(view.bounds, to: content)
+                try require(frame.width > 0 && frame.height > 0 && content.bounds.contains(frame), "rendered control clipped: \(view) \(frame)")
+            }
+            for view in [settings.status, settings.toggle, settings.sensitivity, settings.value, settings.reverse,
+                         settings.recorder, settings.clear, settings.message, settings.applicationScroll,
+                         settings.add, settings.removeSelected, settings.applicationMessage] {
+                try withinBounds(view)
+            }
+            for label in [settings.status, settings.message, settings.applicationMessage] {
+                let required = label.cell!.cellSize(forBounds: NSRect(x: 0, y: 0, width: label.bounds.width, height: 1000)).height
+                try require(required <= label.bounds.height, "wrapping message clipped: \(required) > \(label.bounds.height)")
+            }
+            try require(settings.toggle.accessibilityIdentifier() == "penpan.toggle" &&
+                        settings.status.accessibilityIdentifier() == "penpan.status" &&
+                        settings.applications.accessibilityIdentifier() == "penpan.exclusions.list" &&
+                        settings.applications.accessibilityLabel()?.contains("Excluded applications") == true &&
+                        settings.add.accessibilityIdentifier() == "penpan.exclusions.add" &&
+                        settings.removeSelected.accessibilityIdentifier() == "penpan.exclusions.remove", "new accessibility IDs/labels missing")
+            let keyViews: [NSView] = [settings.toggle, settings.sensitivity, settings.reverse, settings.recorder, settings.clear,
+                                    settings.applications, settings.add, settings.removeSelected]
+            for index in keyViews.indices {
+                try require(keyViews[index].nextKeyView === keyViews[(index + 1) % keyViews.count], "keyboard order broken")
+            }
+            let row = settings.applications.view(atColumn: 0, row: 0, makeIfNecessary: true) as! NSTableCellView
+            row.layoutSubtreeIfNeeded()
+            try require(row.toolTip?.contains(longID.rawValue) == true && row.accessibilityLabel()?.contains(longID.rawValue) == true,
+                        "truncated ID not discoverable via tooltip/accessibility")
+            for label in row.subviews.compactMap({ $0 as? NSTextField }) {
+                try require(row.bounds.contains(label.convert(label.bounds, to: row)), "long app row clipped")
+            }
+            guard let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { throw Failure("cannot render Settings fixture") }
+            settings.window.effectiveAppearance.performAsCurrentDrawingAppearance {
+                content.cacheDisplay(in: content.bounds, to: bitmap)
+            }
+            guard let png = bitmap.representation(using: .png, properties: [:]) else { throw Failure("cannot encode Settings fixture") }
+            try png.write(to: URL(fileURLWithPath: ".build/settings-fixture.png"))
+            print("NATIVE grouped Settings rendered \(content.bounds.size), saved .build/settings-fixture.png")
+        }
+    }
+
     static func main() {
         switch CommandLine.arguments.dropFirst().first {
-        case "--offline": offline(); lifecycleOffline(); settingsOffline()
-        case "--native": native(); settingsNative()
+        case "--offline": offline(); lifecycleOffline(); settingsOffline(); exclusionsOffline()
+        case "--native": native(); settingsNative(); exclusionsNative()
         default:
             print("Usage: pen-pan-tests --offline | --native\nNeither mode creates an event tap or posts global input. Native uses a temporary nonactivating app-local fixture.")
             return

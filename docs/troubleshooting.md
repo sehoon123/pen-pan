@@ -1,5 +1,15 @@
 # Troubleshooting
 
+## Handle a downloaded binary warning
+
+The experimental v0.1.0 ZIP contains a standalone Apple Silicon (`arm64`) executable for macOS 26.0 or later, tested on macOS 26.6.2. It is ad-hoc signed, not Developer ID signed or notarized. It is not an app bundle or an Intel build.
+
+If macOS blocks the downloaded executable or warns that Apple cannot verify it, treat that as a Gatekeeper launch decision. First verify the archive against the separate `SHA256SUMS` asset as described in [Quick start](../README.md#use-the-experimental-v010-binary).
+
+Proceed only if you trust the download and choose to run it. Use macOS's normal per-item approval controls in **System Settings > Privacy & Security** when offered. You can decline and [build from source](../README.md#build-from-source) instead. Do not disable Gatekeeper or SIP, or edit the TCC permission database.
+
+Gatekeeper approval does not grant Accessibility access. Accessibility access cannot resolve a Gatekeeper launch block. Once the executable starts, follow the event-tap steps below if the menu reports an unavailable tap.
+
 ## Restore event-tap access
 
 If the menu stays **Pen Pan: OFF** and reports that it could not create an event tap:
@@ -19,9 +29,9 @@ If Settings reports a reserved, system, or unavailable shortcut:
 
 1. Open **Settings...**.
 2. Click the shortcut recorder.
-3. Press and release a different combination that includes Control, Option, or Command.
+3. Press and release a different combination that includes Control, Option, or Command, or choose F13 through F20 alone.
 
-Bare typing, Space, Shift alone, and modifier-only combinations are unsupported. Escape cancels recording. Keep the Settings window active until you release the recorded key.
+Bare typing, Space, bare F1 through F12, Shift-only typing combinations, media keys, and modifier-only combinations are unsupported. Escape cancels recording. Keep the Settings window active until you release the recorded key.
 
 A failed replacement keeps the previous binding. If a saved binding is unavailable at startup, it stays saved but inactive. Re-record the binding after resolving the conflict, or choose **Clear** to remove it.
 
@@ -42,9 +52,13 @@ If a tap becomes a pan too readily, check whether your launch environment sets `
 
 ## Restore writing, selection, or object dragging
 
-Choose **Turn OFF**, then lift the pen before starting another contact. While ON, pen drags outside the helper's Settings window become scrolling, including handwriting, long-press actions, selection, and object dragging.
+Choose **Turn OFF** in the menu or Settings, then lift the pen before starting another contact. To keep native pen input in one app while Pen Pan stays ON, open **Settings... > Excluded apps**, choose **Add application…**, and select the app.
+
+The exclusion follows the bundle ID of the window under the pen at contact start, not keyboard focus. A different app with the same display name does not match. The row shows the bundle ID for confirmation. A missing or invalid application package does not change the list. Use **Remove selected** to restore scrolling in the app for new contacts.
 
 If the menu shows **OFF, draining**, the helper is discarding the rest of a contact it already captured. Turning ON again does not revive that contact. Release it before you continue.
+
+If scrolling unexpectedly passes through while exclusions are active, the target application may be unresolved. Pen Pan prefers native input over accidental interception in that case. Remove exclusions to return to the baseline policy, or report the target app and display arrangement without private window content.
 
 If scrolling changes targets, keep the pen inside the intended scrollable area. Scroll events target the current pen position, not the original pen-down position.
 
