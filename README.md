@@ -4,27 +4,29 @@ Pen Pan is an experimental macOS helper that turns pen drags into two-axis scrol
 
 Pen Pan is available as source and an experimental standalone binary. It is not a touchscreen driver and does not add multitouch or zoom gestures.
 
-The **Option-native input** and **explicit scrolling axes** controls below are unreleased source-branch changes. They are not in the existing **v0.1.0** download. The other controls remain available in v0.1.0.
+The **Option-native input** and **explicit scrolling axes** controls below are included in this source and planned for the experimental **v0.2.0** binary prerelease. The earlier **v0.1.0** download does not include these two controls.
 
 ## Quick start
 
-### Use the experimental v0.1.0 binary
+### Use the experimental v0.2.0 binary
+
+The v0.2.0 binary prerelease is planned. Follow these instructions once its assets are published on the Releases page.
 
 The standalone ZIP requires Apple Silicon (`arm64`) and macOS 26.0 or later. It was tested on macOS 26.6.2. It contains a command-line/menu helper, not an app bundle or Intel build. The executable is ad-hoc signed, not Developer ID signed or notarized.
 
-1. Open the repository's [Releases page](https://github.com/sehoon123/pen-pan/releases) and select the experimental **v0.1.0** prerelease. Download `pen-pan-v0.1.0-macos-arm64.zip` and the separate `SHA256SUMS` asset into the same directory.
+1. Open the repository's [Releases page](https://github.com/sehoon123/pen-pan/releases) and select the experimental **v0.2.0** prerelease. Download `pen-pan-v0.2.0-macos-arm64.zip` and the separate `SHA256SUMS` asset into the same directory.
 2. In Terminal, change to that directory and verify the archive before extraction:
 
    ```sh
    shasum -a 256 -c SHA256SUMS
    ```
 
-   Continue only if the output reports `pen-pan-v0.1.0-macos-arm64.zip: OK`. If verification fails, stop and download both assets again.
+   Continue only if the output reports `pen-pan-v0.2.0-macos-arm64.zip: OK`. If verification fails, stop and download both assets again.
 3. Extract the archive and check usage:
 
    ```sh
-   unzip pen-pan-v0.1.0-macos-arm64.zip -d pen-pan-v0.1.0-macos-arm64 &&
-   cd pen-pan-v0.1.0-macos-arm64 &&
+   unzip pen-pan-v0.2.0-macos-arm64.zip -d pen-pan-v0.2.0-macos-arm64 &&
+   cd pen-pan-v0.2.0-macos-arm64 &&
    ./pen-pan --help
    ```
 
@@ -56,25 +58,25 @@ Menu mode starts with **Pen Pan: OFF** in the menu bar. If the menu reports an u
 
 1. Choose **Turn ON** from the menu bar to enable pen scrolling.
 2. Tap to click, or drag the pen to scroll horizontally and vertically. Scrolling follows the current pen position.
-3. Outside excluded apps, choose **Turn OFF** before handwriting, long-press actions, text selection, or object dragging. Unreleased source builds also offer opt-in Option-native input for individual contacts.
+3. Outside excluded apps, choose **Turn OFF** before handwriting, long-press actions, text selection, or object dragging. Option-native input is another opt-in way to keep individual contacts native.
 4. Open **Settings...** for the live ON/OFF control and the **Scrolling**, **Toggle shortcut**, and **Excluded apps** groups.
 5. Choose **Quit** to stop the helper. If it is waiting for a captured contact, lift the pen.
 
 Fresh sensitivity is **0.30x**, adjustable from **0.05x** to **2.00x**. Direction reversal affects both axes. Changes apply to the next pen contact. Contacts that start on the helper's own Settings window or application picker remain ordinary input, even while ON.
 
-In the unreleased source branch, the axes popup offers **Both axes**, **Vertical only**, and **Horizontal only**. Both is the default. The six-pixel radial tap-to-pan threshold is unchanged. A drag only along a suppressed axis is still a pan, with no scroll or click.
+The axes popup offers **Both axes**, **Vertical only**, and **Horizontal only**. Both is the default. The six-pixel radial tap-to-pan threshold is unchanged. A drag only along a suppressed axis is still a pan, with no scroll or click.
 
-The unreleased **Hold Option for native pen input** checkbox starts unchecked. Enable it, then hold Option **before** pen contact to keep the original native input through release. Option's normal app actions, such as Option-click or Option-drag, remain. This is not an unmodified click. Adding Option after contact does not bypass scrolling. Releasing Option or changing the setting during a contact does not reclassify it. Lift and start a new contact without Option to scroll again, unless the app is excluded or Pen Pan is OFF.
+The **Hold Option for native pen input** checkbox starts unchecked. Enable it, then hold Option **before** pen contact to keep the original native input through release. Option's normal app actions, such as Option-click or Option-drag, remain. This is not an unmodified click. Adding Option after contact does not bypass scrolling. Releasing Option or changing the setting during a contact does not reclassify it. Lift and start a new contact without Option to scroll again, unless the app is excluded or Pen Pan is OFF.
 
 To keep handwriting or native drags in an app, choose **Add application…** in **Excluded apps** and select its `.app` package. Rows show the local name and bundle ID. **Remove selected** restores scrolling for new contacts in that app. The application under the pen at contact start determines the exclusion, not the app with keyboard focus. The list starts empty.
 
 To assign a toggle shortcut, click **Record shortcut…**, then press and release a supported key with Control, Option, or Command, or explicitly choose **F13 through F20** alone. **Clear** removes the binding. No shortcut is assigned by default. A chosen shortcut stays reserved while Pen Pan runs, even while OFF. A tablet driver may map a pen button or ExpressKey to F13 through F20. Pen Pan does not configure the driver, and support varies.
 
-Sensitivity, direction reversal, the shortcut, and excluded bundle IDs are saved locally. Unreleased source builds also save axes and the Option-native input preference. Menu mode always restarts OFF. Pen Pan installs no autostart item. See the [configuration reference](docs/configuration.md) for shortcut rules, launch settings, and headless mode.
+Sensitivity, direction reversal, axes, the Option-native input preference, the shortcut, and excluded bundle IDs are saved locally. Menu mode always restarts OFF. Pen Pan installs no autostart item. See the [configuration reference](docs/configuration.md) for shortcut rules, launch settings, and headless mode.
 
 ## Limits
 
-- While ON, ordinary pen long-press, writing, selection, and object drags become scrolling outside excluded apps and the helper's own UI. Unreleased Option-native contacts are another opt-in exception.
+- While ON, ordinary pen long-press, writing, selection, and object drags become scrolling outside excluded apps and the helper's own UI. Option-native contacts are another opt-in exception.
 - With exclusions active, an unresolved pen-down application passes through conservatively. Empty exclusions preserve the normal scrolling behavior. Exclusions apply to entire bundle IDs, not individual documents or windows.
 - Only tablet subtype-1 pen events are adapted. Driver behavior varies. A subtype-0 release can be ambiguous during overlapping pen and mouse contacts.
 - Turning OFF during a captured contact discards its remaining motion and release without clicking. Ordinary input resumes after that contact drains.
@@ -88,7 +90,7 @@ The runtime contains no network client or telemetry code. Its event tap observes
 - [Configuration reference](docs/configuration.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Build, test, and contribute](docs/development.md)
-- [Research behind the unreleased input controls](docs/research/input-controls.md)
+- [Research behind the input controls](docs/research/input-controls.md)
 
 ## License
 

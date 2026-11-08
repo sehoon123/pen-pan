@@ -2,9 +2,9 @@
 
 ## Handle a downloaded binary warning
 
-The experimental v0.1.0 ZIP contains a standalone Apple Silicon (`arm64`) executable for macOS 26.0 or later, tested on macOS 26.6.2. It is ad-hoc signed, not Developer ID signed or notarized. It is not an app bundle or an Intel build.
+The planned experimental v0.2.0 ZIP contains a standalone Apple Silicon (`arm64`) executable for macOS 26.0 or later, tested on macOS 26.6.2. It is ad-hoc signed, not Developer ID signed or notarized. It is not an app bundle or an Intel build.
 
-If macOS blocks the downloaded executable or warns that Apple cannot verify it, treat that as a Gatekeeper launch decision. First verify the archive against the separate `SHA256SUMS` asset as described in [Quick start](../README.md#use-the-experimental-v010-binary).
+If macOS blocks the downloaded executable or warns that Apple cannot verify it, treat that as a Gatekeeper launch decision. First verify the archive against the separate `SHA256SUMS` asset as described in [Quick start](../README.md#use-the-experimental-v020-binary).
 
 Proceed only if you trust the download and choose to run it. Use macOS's normal per-item approval controls in **System Settings > Privacy & Security** when offered. You can decline and [build from source](../README.md#build-from-source) instead. Do not disable Gatekeeper or SIP, or edit the TCC permission database.
 
@@ -12,7 +12,7 @@ Gatekeeper approval does not grant Accessibility access. Accessibility access ca
 
 ## Find the new input controls
 
-The axes popup and **Hold Option for native pen input** checkbox are unreleased source-branch controls. The existing v0.1.0 ZIP does not contain them. The download remains v0.1.0 until a separate release is published. Building that release's source does not add these controls.
+The axes popup and **Hold Option for native pen input** checkbox are included in this source and planned for the experimental v0.2.0 binary prerelease. Follow [Quick start](../README.md#use-the-experimental-v020-binary) once its assets are published. The earlier v0.1.0 ZIP and its source do not contain these controls.
 
 ## Restore event-tap access
 
@@ -54,15 +54,15 @@ An in-progress contact keeps its original settings. Saved sensitivity takes prio
 
 If a tap becomes a pan too readily, check whether your launch environment sets `PENPAN_DEADZONE`. Its default is six screen-coordinate pixels. Sensitivity and threshold do not calibrate physical pen tracking.
 
-## Restrict scrolling to one axis, unreleased
+## Restrict scrolling to one axis
 
-1. Open **Settings...** in a build from the input-controls source branch.
+1. Open **Settings...** in v0.2.0 or a build from this source.
 2. Choose **Vertical only** or **Horizontal only** in the axes popup. **Both axes** restores two-axis output.
 3. Lift the pen before testing the new mode.
 
 The six-pixel radial threshold is unchanged. A drag only along the suppressed axis still becomes a pan. It produces no scroll and does not become a click when you lift or return to the starting point. Use a stationary tap to click.
 
-## Use native Option input for one contact, unreleased
+## Use native Option input for one contact
 
 1. Enable **Hold Option for native pen input** in Settings. It is OFF by default.
 2. Hold Option before touching the pen down.

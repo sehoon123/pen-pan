@@ -1,6 +1,6 @@
 # Configuration reference
 
-The axes popup and Option-native input checkbox are unreleased source-branch controls, not part of the v0.1.0 download. Other controls and existing saved keys retain their v0.1.0 behavior.
+The axes popup and Option-native input checkbox are included in this source and planned for the experimental v0.2.0 binary prerelease. The v0.1.0 download does not include them. Other controls and existing saved keys retain their v0.1.0 behavior.
 
 ## Menu and modes
 
@@ -22,7 +22,7 @@ Settings has the same live status and **Turn ON**, **Turn OFF**, or **Retry ON**
 | --- | --- | --- |
 | **Sensitivity** | 0.05x to 2.00x, inclusive. Lower values produce less scrolling for the same movement. | 0.30x |
 | **Reverse scroll direction** | Reverses horizontal and vertical scrolling together. | Unchecked |
-| **Scrolling axes**, unreleased | Both axes, Vertical only, or Horizontal only. Suppresses output and fractional accumulation on the other axis. | Both axes |
+| **Scrolling axes** | Both axes, Vertical only, or Horizontal only. Suppresses output and fractional accumulation on the other axis. | Both axes |
 
 Sensitivity, reversal, and axes are saved automatically. Each adapted contact captures its settings at pen down, so a change does not alter an in-progress tap or pan.
 
@@ -30,7 +30,7 @@ The default click-to-pan threshold is six screen-coordinate pixels, measured as 
 
 A pen contact that starts on the visible Settings window, its application picker, or an owned sheet or child window remains ordinary input through release, even if it leaves the window. This exception uses the window at the pen-down position. It does not exempt a covered window, another app, or an already-captured pan. These settings are not physical-tablet calibration.
 
-## Option-native input, unreleased
+## Option-native input
 
 **Hold Option for native pen input** defaults to unchecked. When enabled, Option in the original eligible pen-down event flags passes that entire contact unchanged before any pointer-window or application-owner lookup. It generates no clicks or scrolling, regardless of the axes setting. Pen Pan does not monitor the keyboard for this preference or register another shortcut.
 
@@ -78,8 +78,8 @@ The named UserDefaults suite is `local.pen-pan`. Only these values are saved:
 | --- | --- |
 | `sensitivity` | A finite number from 0.05 to 2. |
 | `reversed` | A Boolean for both-axis reversal. |
-| `axes`, unreleased | Exactly `"both"`, `"vertical"`, or `"horizontal"`. Missing, unknown, or non-string values default to `"both"`. |
-| `optionNativeInput`, unreleased | A strict Boolean. The default is `false`. Missing or wrong-type values, including numbers and strings, default to `false`. |
+| `axes` | Exactly `"both"`, `"vertical"`, or `"horizontal"`. Missing, unknown, or non-string values default to `"both"`. |
+| `optionNativeInput` | A strict Boolean. The default is `false`. Missing or wrong-type values, including numbers and strings, default to `false`. |
 | `shortcut` | An optional dictionary containing integral UInt32 `keyCode` and Carbon `modifiers`. Only Command, Option, Control, and Shift bits are supported. **Clear** removes it. |
 | `excludedApps` | A sorted array of validated bundle-ID strings. The fresh default is empty. Duplicates collapse on load. |
 

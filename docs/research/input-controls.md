@@ -1,6 +1,6 @@
 # Research behind the input controls
 
-Pen Pan needs native selection and dragging alongside direct-displacement scrolling, plus a deliberate way to restrict scroll output. The selected controls are opt-in Option-native contacts and an explicit axes popup. Both are unreleased source-branch changes, not part of the existing v0.1.0 download.
+Pen Pan needs native selection and dragging alongside direct-displacement scrolling, plus a deliberate way to restrict scroll output. The selected controls are opt-in Option-native contacts and an explicit axes popup. Both are included in this source and planned for the experimental v0.2.0 binary prerelease. The earlier v0.1.0 download does not include them.
 
 ## First-party observations
 
@@ -24,4 +24,4 @@ The axes popup offers **Both axes**, **Vertical only**, and **Horizontal only**,
 
 Inertia is deferred because prior excessive-movement feedback provides no calibrated basis for a safe tail. Adaptive axis lock would introduce device heuristics. Long-press passthrough would require delayed replay and target lifetime handling. Per-app sensitivity, device profiles, and packaging changes are outside these two workflow gaps. Smart Scroll's Vector Scroll is not the desired displacement-following behavior.
 
-See the [configuration reference](../configuration.md) for the unreleased controls and saved keys, and [development guide](../development.md) for the app-local checks and physical-input limits.
+See the [configuration reference](../configuration.md) for the controls and saved keys, and [development guide](../development.md) for the app-local checks and physical-input limits.
