@@ -82,6 +82,7 @@ Sensitivity, direction reversal, axes, the Option-native input preference, the s
 - Turning OFF during a captured contact discards its remaining motion and release without clicking. Ordinary input resumes after that contact drains.
 - Scrolling can change targets when the pen crosses into another scrollable area.
 - Physical pen tracking and calibration, physical global-shortcut recognition, Option-flag delivery by tablet drivers, multi-display behavior, and compatibility with every app remain unverified.
+- Known CI limitation: the app-local native scroll observation has intermittently failed in CI ([Issue #3](https://github.com/sehoon123/pen-pan/issues/3)). Recent checks pass, but the historical cause remains unknown and unfixed. This is not an observed live-input production defect or hardware certification.
 
 The runtime contains no network client or telemetry code. Its event tap observes only left-button down, drag, and up events, not keyboard input.
 

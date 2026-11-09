@@ -49,6 +49,8 @@ No arguments and `--help` return before opening the live settings suite, acquiri
 
 The macOS GitHub Actions workflow runs `make check` with read-only repository access. It has no release or binary-upload step. A local pass is not evidence that a remote CI run has passed.
 
+For isolated native scroll failure context, run `.build/pen-pan-tests --native-axis-probe`. It runs only the existing 12-case axis check in a fresh app-local process, using raw generated events. The result is frozen before diagnostic getters and logging. CI also runs it once in a separate `always()` step when the test binary exists; neither step masks failures or replaces `make check`. [Issue #3](https://github.com/sehoon123/pen-pan/issues/3) tracks historical CI observation flakiness: recent CI passes do not establish a cause or a fix, and this probe is diagnostic, not a repair or hardware certification.
+
 To remove build outputs:
 
 ```sh

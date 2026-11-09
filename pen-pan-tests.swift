@@ -2387,7 +2387,7 @@ struct PenPanTests {
         nativeAxisTest()
     }
 
-    private static func nativeAxisTest(currentTime: Bool = false) {
+    private static func nativeAxisTest() {
         test("native NSScrollView observes explicit axes in both directions with reversal and no blocked motion") {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 300),
                                   styleMask: [.titled], backing: .buffered, defer: false)
@@ -2435,35 +2435,12 @@ struct PenPanTests {
                                     native.hasPreciseScrollingDeltas && native.scrollingDeltaX == x && native.scrollingDeltaY == y &&
                                     event.flags.isEmpty && native.modifierFlags.isEmpty,
                                     "emitted native wheel differs from exact expected pixels (\(x),\(y)) or flags")
-                        var deliveredEvent = event
-                        var deliveredNative = native
-                        if currentTime {
-                            guard let copy = event.copy() else { throw Failure("native wheel copy failed") }
-                            let originalTimestamp = event.timestamp
-                            // Test transport comparison only; the producer and default raw path stay unchanged.
-                            copy.timestamp = UInt64(ProcessInfo.processInfo.systemUptime * 1e9)
-                            guard let converted = NSEvent(cgEvent: copy) else { throw Failure("native wheel copy conversion failed") }
-                            try require(copy !== event && event.timestamp == originalTimestamp && copy.timestamp > 0 &&
-                                        converted.timestamp > 0 && abs(converted.timestamp - ProcessInfo.processInfo.systemUptime) < 0.01 &&
-                                        abs(Double(copy.timestamp) / 1e9 - converted.timestamp) < 0.000001,
-                                        "native wheel copy timestamp differs from current monotonic time or changed original")
-                            try require(copy.type == event.type && copy.flags == event.flags && copy.location == event.location &&
-                                        copy.getIntegerValueField(.scrollWheelEventPointDeltaAxis2) == Int64(x) &&
-                                        copy.getIntegerValueField(.scrollWheelEventPointDeltaAxis1) == Int64(y) &&
-                                        copy.getIntegerValueField(.scrollWheelEventIsContinuous) == 1 && converted.type == .scrollWheel &&
-                                        converted.hasPreciseScrollingDeltas && converted.scrollingDeltaX == x && converted.scrollingDeltaY == y &&
-                                        converted.modifierFlags == native.modifierFlags && converted.locationInWindow == native.locationInWindow &&
-                                        converted.phase == native.phase && converted.momentumPhase == native.momentumPhase,
-                                        "native wheel timestamp copy changed pixels, flags, location or phase")
-                            deliveredEvent = copy
-                            deliveredNative = converted
-                        }
                         let expected = CGPoint(x: 400 - x, y: 400 - y)
                         func atExpectedOrigin() -> Bool {
                             let origin = scroll.contentView.bounds.origin
                             return abs(origin.x - expected.x) < 0.01 && abs(origin.y - expected.y) < 0.01
                         }
-                        scroll.scrollWheel(with: deliveredNative)
+                        scroll.scrollWheel(with: native)
                         // AppKit applies precise scrolling asynchronously; observe the single wheel, never resend it.
                         let observationStart = ProcessInfo.processInfo.systemUptime
                         let deadline = observationStart + 1
@@ -2483,7 +2460,7 @@ struct PenPanTests {
                                 "\(name)={frame=\(view.frame) bounds=\(view.bounds) visibleRect=\(view.visibleRect) hidden=\(view.isHiddenOrHasHiddenAncestor) needsDisplay=\(view.needsDisplay) needsLayout=\(view.needsLayout) wantsLayer=\(view.wantsLayer) layer=\(view.layer != nil) layerNeedsDisplay=\(view.layer?.needsDisplay() ?? false) layerNeedsLayout=\(view.layer?.needsLayout() ?? false)}"
                             }.joined(separator: " ")
                             let fields = [
-                                "NATIVE axis-context stage=post-result mode=\(currentTime ? "current-time" : "raw") axes=\(axes.rawValue) reversed=\(reversed) sign=\(sign) sensitivity=\(session.configuration.scroll.sensitivity) frozenOrigin=\(origin) matches=\(matches) expected=\(expected) observerElapsed=\(elapsed) pumpCount=\(pumpCount) uptime=\(ProcessInfo.processInfo.systemUptime) originalCGTimestamp=\(event.timestamp) deliveredCGTimestamp=\(deliveredEvent.timestamp) originalNSTimestamp=\(native.timestamp) deliveredNSTimestamp=\(deliveredNative.timestamp)",
+                                "NATIVE axis-context stage=post-result mode=raw axes=\(axes.rawValue) reversed=\(reversed) sign=\(sign) sensitivity=\(session.configuration.scroll.sensitivity) frozenOrigin=\(origin) matches=\(matches) expected=\(expected) observerElapsed=\(elapsed) pumpCount=\(pumpCount) uptime=\(ProcessInfo.processInfo.systemUptime)",
                                 "window={number=\(window.windowNumber) frame=\(window.frame) visible=\(window.isVisible) occlusion=\(window.occlusionState.rawValue) unoccluded=\(window.occlusionState.contains(.visible))} \(viewState) documentRect=\(scroll.contentView.documentRect)",
                                 "app={running=\(app.isRunning) active=\(app.isActive) activationPolicy=\(app.activationPolicy().rawValue) currentEventType=\(app.currentEvent.map { String($0.type.rawValue) } ?? "nil") currentEventWindow=\(app.currentEvent.map { String($0.windowNumber) } ?? "nil")} runLoop={current=\(RunLoop.current.currentMode?.rawValue ?? "nil") cfCurrent=\(CFRunLoopCopyCurrentMode(CFRunLoopGetCurrent()).map { String(describing: $0) } ?? "nil") default=\(RunLoop.Mode.default.rawValue)}",
                                 "CG={type=\(event.type.rawValue) timestamp=\(event.timestamp) flags=\(event.flags.rawValue) targetPID=\(event.getIntegerValueField(.eventTargetUnixProcessID)) targetPSN=\(event.getIntegerValueField(.eventTargetProcessSerialNumber)) windowUnderPointer=\(event.getIntegerValueField(.mouseEventWindowUnderMousePointer)) windowCanHandle=\(event.getIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent)) continuous=\(event.getIntegerValueField(.scrollWheelEventIsContinuous)) pointDelta=(\(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2)),\(event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1)))}",
@@ -2504,9 +2481,8 @@ struct PenPanTests {
         case "--offline": offline(); lifecycleOffline(); settingsOffline(); exclusionsOffline(); inputControlsOffline()
         case "--native": native(); settingsNative(); exclusionsNative(); inputControlsNative()
         case "--native-axis-probe": _ = nativeApplication(); nativeAxisTest()
-        case "--native-axis-current-time": _ = nativeApplication(); nativeAxisTest(currentTime: true)
         default:
-            print("Usage: pen-pan-tests --offline | --native | --native-axis-probe | --native-axis-current-time\nNo mode creates an event tap or posts global input. Native modes use temporary nonactivating app-local fixtures; axis modes run only the existing axis test, not the full suite. --native-axis-current-time changes only a fixture copy's timestamp for a test transport comparison; default/full modes stay raw.")
+            print("Usage: pen-pan-tests --offline | --native | --native-axis-probe\nNo mode creates an event tap or posts global input. Native modes use temporary nonactivating app-local fixtures; --native-axis-probe runs only the existing axis test, not the full suite.")
             return
         }
         print("\(tests - failures)/\(tests) checks passed. No event taps, global posting, or helper processes.")

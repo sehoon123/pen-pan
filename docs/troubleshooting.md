@@ -105,6 +105,10 @@ If the event tap was disabled while a contact was active, the helper cancels out
 
 If graceful shutdown remains stuck after release, use Activity Monitor to force quit the identified Pen Pan process. Force quit bypasses contact draining. Restart only after the old process exits.
 
+## Known native-test CI limitation
+
+The app-local native scroll observation has intermittently failed in CI ([Issue #3](https://github.com/sehoon123/pen-pan/issues/3)). Recent CI checks pass; the historical cause remains unknown and unfixed. This is not an observed live-input production defect, and passing tests do not certify physical hardware. See the [isolated probe](development.md#run-the-safe-checks) for failure context; it does not replace the full suite or excuse a failing check.
+
 ## Report a compatibility problem
 
 Include your macOS version, Swift version, processor architecture, tablet model and driver, target app, and steps to reproduce. State whether the problem occurs while ON or OFF. Omit private paths and unrelated input from reports.

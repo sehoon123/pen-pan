@@ -22,9 +22,3 @@ jobs:
           if [ -x .build/pen-pan-tests ]; then
             .build/pen-pan-tests --native-axis-probe
           fi
-      - name: Isolated native axis current-time diagnostic
-        if: always()
-        run: |
-          if [ -x .build/pen-pan-tests ]; then
-            .build/pen-pan-tests --native-axis-current-time
-          fi
