@@ -2,13 +2,17 @@
 
 ## Handle a downloaded binary warning
 
-The experimental v0.1.0 ZIP contains a standalone Apple Silicon (`arm64`) executable for macOS 26.0 or later, tested on macOS 26.6.2. It is ad-hoc signed, not Developer ID signed or notarized. It is not an app bundle or an Intel build.
+The planned experimental v0.2.0 ZIP contains a standalone Apple Silicon (`arm64`) executable for macOS 26.0 or later, tested on macOS 26.6.2. It is ad-hoc signed, not Developer ID signed or notarized. It is not an app bundle or an Intel build.
 
-If macOS blocks the downloaded executable or warns that Apple cannot verify it, treat that as a Gatekeeper launch decision. First verify the archive against the separate `SHA256SUMS` asset as described in [Quick start](../README.md#use-the-experimental-v010-binary).
+If macOS blocks the downloaded executable or warns that Apple cannot verify it, treat that as a Gatekeeper launch decision. First verify the archive against the separate `SHA256SUMS` asset as described in [Quick start](../README.md#use-the-experimental-v020-binary).
 
 Proceed only if you trust the download and choose to run it. Use macOS's normal per-item approval controls in **System Settings > Privacy & Security** when offered. You can decline and [build from source](../README.md#build-from-source) instead. Do not disable Gatekeeper or SIP, or edit the TCC permission database.
 
 Gatekeeper approval does not grant Accessibility access. Accessibility access cannot resolve a Gatekeeper launch block. Once the executable starts, follow the event-tap steps below if the menu reports an unavailable tap.
+
+## Find the new input controls
+
+The axes popup and **Hold Option for native pen input** checkbox are included in this source and planned for the experimental v0.2.0 binary prerelease. Follow [Quick start](../README.md#use-the-experimental-v020-binary) once its assets are published. The earlier v0.1.0 ZIP and its source do not contain these controls.
 
 ## Restore event-tap access
 
@@ -50,6 +54,26 @@ An in-progress contact keeps its original settings. Saved sensitivity takes prio
 
 If a tap becomes a pan too readily, check whether your launch environment sets `PENPAN_DEADZONE`. Its default is six screen-coordinate pixels. Sensitivity and threshold do not calibrate physical pen tracking.
 
+## Restrict scrolling to one axis
+
+1. Open **Settings...** in v0.2.0 or a build from this source.
+2. Choose **Vertical only** or **Horizontal only** in the axes popup. **Both axes** restores two-axis output.
+3. Lift the pen before testing the new mode.
+
+The six-pixel radial threshold is unchanged. A drag only along the suppressed axis still becomes a pan. It produces no scroll and does not become a click when you lift or return to the starting point. Use a stationary tap to click.
+
+## Use native Option input for one contact
+
+1. Enable **Hold Option for native pen input** in Settings. It is OFF by default.
+2. Hold Option before touching the pen down.
+3. Lift the pen, then start another contact without Option to scroll again while ON outside excluded apps and the helper's UI.
+
+Option's normal destination-app actions remain. An Option-click that downloads a link, changes selection, or copies an object is not neutral input. Turn Pen Pan OFF or exclude the app when you need native input without Option.
+
+Adding Option after contact starts does not bypass an owned tap or pan. Releasing Option early or editing the preference does not change an already-passed contact. A preference edit does not reset a pan or revive a drain.
+
+If the contact still scrolls, confirm that the checkbox is enabled and that Option was held before contact. The tablet driver must include Option in the original pen-down flags. App-local tests do not prove physical driver delivery. Do not change driver settings solely to infer support. Record the tablet model, driver, macOS version, and destination app when reporting a mismatch.
+
 ## Restore writing, selection, or object dragging
 
 Choose **Turn OFF** in the menu or Settings, then lift the pen before starting another contact. To keep native pen input in one app while Pen Pan stays ON, open **Settings... > Excluded apps**, choose **Add application…**, and select the app.
@@ -81,8 +105,12 @@ If the event tap was disabled while a contact was active, the helper cancels out
 
 If graceful shutdown remains stuck after release, use Activity Monitor to force quit the identified Pen Pan process. Force quit bypasses contact draining. Restart only after the old process exits.
 
+## Known native-test CI limitation
+
+The app-local native scroll observation has intermittently failed in CI ([Issue #3](https://github.com/sehoon123/pen-pan/issues/3)). Recent CI checks pass; the historical cause remains unknown and unfixed. This is not an observed live-input production defect, and passing tests do not certify physical hardware. See the [isolated probe](development.md#run-the-safe-checks) for failure context; it does not replace the full suite or excuse a failing check.
+
 ## Report a compatibility problem
 
 Include your macOS version, Swift version, processor architecture, tablet model and driver, target app, and steps to reproduce. State whether the problem occurs while ON or OFF. Omit private paths and unrelated input from reports.
 
-Physical pen tracking, calibration, multi-display behavior, and every-app compatibility remain unverified. Passing the app-local tests does not establish hardware support.
+Physical pen tracking, calibration, Option-flag delivery by tablet drivers, multi-display behavior, and every-app compatibility remain unverified. Passing the app-local tests does not establish hardware support.

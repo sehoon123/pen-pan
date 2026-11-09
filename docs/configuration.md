@@ -1,5 +1,7 @@
 # Configuration reference
 
+The axes popup and Option-native input checkbox are included in this source and planned for the experimental v0.2.0 binary prerelease. The v0.1.0 download does not include them. Other controls and existing saved keys retain their v0.1.0 behavior.
+
 ## Menu and modes
 
 | Control | Behavior |
@@ -20,12 +22,23 @@ Settings has the same live status and **Turn ON**, **Turn OFF**, or **Retry ON**
 | --- | --- | --- |
 | **Sensitivity** | 0.05x to 2.00x, inclusive. Lower values produce less scrolling for the same movement. | 0.30x |
 | **Reverse scroll direction** | Reverses horizontal and vertical scrolling together. | Unchecked |
+| **Scrolling axes** | Both axes, Vertical only, or Horizontal only. Suppresses output and fractional accumulation on the other axis. | Both axes |
 
-Sensitivity and reversal are saved automatically. Each adapted contact captures its settings at pen down, so a change does not alter an in-progress tap or pan.
+Sensitivity, reversal, and axes are saved automatically. Each adapted contact captures its settings at pen down, so a change does not alter an in-progress tap or pan.
 
-The default click-to-pan threshold is six screen-coordinate pixels, measured as distance from pen down. A stationary tap produces a deferred click pair at the original position on release. Once a contact becomes a pan, it stays a pan until release.
+The default click-to-pan threshold is six screen-coordinate pixels, measured as distance from pen down. A stationary tap produces a deferred click pair at the original position on release. Once a contact becomes a pan, it stays a pan until release. Every axis mode uses the same radial threshold, including movement on a suppressed axis. A suppressed-axis-only pan produces neither scrolling nor a click, even if it returns to its origin. Allowed-axis fractions and release motion are retained.
 
 A pen contact that starts on the visible Settings window, its application picker, or an owned sheet or child window remains ordinary input through release, even if it leaves the window. This exception uses the window at the pen-down position. It does not exempt a covered window, another app, or an already-captured pan. These settings are not physical-tablet calibration.
+
+## Option-native input
+
+**Hold Option for native pen input** defaults to unchecked. When enabled, Option in the original eligible pen-down event flags passes that entire contact unchanged before any pointer-window or application-owner lookup. It generates no clicks or scrolling, regardless of the axes setting. Pen Pan does not monitor the keyboard for this preference or register another shortcut.
+
+Hold Option before contact. The destination app receives its normal Option-click or Option-drag behavior, including any selection, copy, or download action the app assigns. The preference does not remove modifiers or provide neutral input. A tablet driver must deliver Option in the pen-down flags for this to work.
+
+Adding Option after an adapted contact starts does not bypass it. Releasing Option, editing the preference, or turning ON during a passed contact does not steal its drag or release, including a subtype-0 release. Preference edits do not cancel owned pans or revive draining contacts. Lift and start a new contact without Option to resume scrolling, subject to ON status, exclusions, and the helper's own UI exception. OFF and Quit retain their existing cancellation rules.
+
+The shared visible hint says changes affect new contacts. Status continues to show the lifecycle state, not current keyboard modifiers.
 
 ## Toggle shortcut
 
@@ -65,6 +78,8 @@ The named UserDefaults suite is `local.pen-pan`. Only these values are saved:
 | --- | --- |
 | `sensitivity` | A finite number from 0.05 to 2. |
 | `reversed` | A Boolean for both-axis reversal. |
+| `axes` | Exactly `"both"`, `"vertical"`, or `"horizontal"`. Missing, unknown, or non-string values default to `"both"`. |
+| `optionNativeInput` | A strict Boolean. The default is `false`. Missing or wrong-type values, including numbers and strings, default to `false`. |
 | `shortcut` | An optional dictionary containing integral UInt32 `keyCode` and Carbon `modifiers`. Only Command, Option, Control, and Shift bits are supported. **Clear** removes it. |
 | `excludedApps` | A sorted array of validated bundle-ID strings. The fresh default is empty. Duplicates collapse on load. |
 
@@ -77,7 +92,7 @@ ON or OFF mode and the threshold are not saved. Invalid saved fields fall back i
 | `PENPAN_SENS` | A finite number from 0.05 to 2, inclusive. | Valid saved sensitivity takes priority, then this launch seed, then 0.30. |
 | `PENPAN_DEADZONE` | A finite positive number of screen-coordinate pixels. | This launch seed takes priority over six. There is no saved threshold. |
 
-A valid saved sensitivity overrides even an invalid `PENPAN_SENS`. Otherwise, an invalid launch value stops startup before the event tap is installed. `PENPAN_DEADZONE` is always validated for live modes. No environment variable controls reversal, the shortcut, or exclusions.
+A valid saved sensitivity overrides even an invalid `PENPAN_SENS`. Otherwise, an invalid launch value stops startup before the event tap is installed. `PENPAN_DEADZONE` is always validated for live modes. No environment variable controls reversal, axes, Option-native input, the shortcut, or exclusions.
 
 ## Command-line behavior
 
