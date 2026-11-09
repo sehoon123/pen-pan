@@ -1,0 +1,34 @@
+name: Native consumer diagnostic
+
+on:
+  push:
+    branches:
+      - diag/native-consumer-responsive-20261109
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    if: ${{ github.event.created == true && github.event.deleted == false && github.run_attempt == '1' }}
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - run: python3 tools/ci-responsive-diagnostic.py hosted-batch --expected-head "$GITHUB_SHA" --out .build/native-consumer-diagnostic
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-consumer-${{ github.sha }}-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: error
+          include-hidden-files: true
+          path: |
+            .build/native-consumer-diagnostic/*.json
+            .build/native-consumer-diagnostic/*.stdout.log
+            .build/native-consumer-diagnostic/*.stderr.log
+            .build/native-consumer-diagnostic/variant.diff
