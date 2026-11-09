@@ -1170,7 +1170,7 @@ struct PenPanTests {
 
     private static func nativeApplication() -> NSApplication {
         let app = NSApplication.shared
-        app.setActivationPolicy(.prohibited)
+        precondition(app.setActivationPolicy(.accessory), "Native fixtures require a window-capable activation policy")
         app.finishLaunching()
         return app
     }
